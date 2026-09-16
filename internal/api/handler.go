@@ -1,0 +1,328 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"path"
+	"strconv"
+
+	"portable-ssh-ftp/internal/session"
+)
+
+type API struct {
+	mgr *session.Manager
+}
+
+func NewAPI(mgr *session.Manager) *API {
+	return &API{mgr: mgr}
+}
+
+func (a *API) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/api/connect", a.handleConnect)
+	mux.HandleFunc("/api/disconnect", a.handleDisconnect)
+	mux.HandleFunc("/api/status", a.handleStatus)
+
+	mux.HandleFunc("/api/ftp/list", a.handleFTPList)
+	mux.HandleFunc("/api/ftp/pwd", a.handleFTPPwd)
+	mux.HandleFunc("/api/ftp/cd", a.handleFTPCd)
+	mux.HandleFunc("/api/ftp/download", a.handleFTPDownload)
+	mux.HandleFunc("/api/ftp/upload", a.handleFTPUpload)
+	mux.HandleFunc("/api/ftp/delete", a.handleFTPDelete)
+	mux.HandleFunc("/api/ftp/mkdir", a.handleFTPMkdir)
+}
+
+func jsonResponse(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(data)
+}
+
+func errorResponse(w http.ResponseWriter, status int, message string) {
+	jsonResponse(w, status, map[string]string{"error": message})
+}
+
+func (a *API) handleConnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req session.ConnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid request payload: "+err.Error())
+		return
+	}
+
+	sess, err := a.mgr.CreateSession(req)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Connection failed: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"sessionId":   sess.ID,
+		"sshConnected": sess.SSHClient != nil,
+		"ftpConnected": sess.FTPClient != nil,
+		"host":        req.Host,
+	})
+}
+
+func (a *API) handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sessionID := r.URL.Query().Get("sessionId")
+	if err := a.mgr.CloseSession(sessionID); err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "disconnected"})
+}
+
+func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("sessionId")
+	sess, ok := a.mgr.GetSession(sessionID)
+	if !ok {
+		jsonResponse(w, http.StatusOK, map[string]any{
+			"connected": false,
+		})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"connected":    true,
+		"sessionId":    sess.ID,
+		"sshConnected": sess.SSHClient != nil,
+		"ftpConnected": sess.FTPClient != nil,
+		"host":         sess.SSHConfig.Host,
+		"sshPort":      sess.SSHConfig.Port,
+		"sshUsername":  sess.SSHConfig.Username,
+		"ftpPort":      sess.FTPConfig.Port,
+		"ftpUsername":  sess.FTPConfig.Username,
+		"ftpCharset":   sess.FTPConfig.Charset,
+	})
+}
+
+func (a *API) getFTPClient(r *http.Request) (*session.Session, error) {
+	sessionID := r.URL.Query().Get("sessionId")
+	sess, ok := a.mgr.GetSession(sessionID)
+	if !ok || sess.FTPClient == nil {
+		return nil, fmt.Errorf("FTP not connected")
+	}
+	return sess, nil
+}
+
+func (a *API) handleFTPList(w http.ResponseWriter, r *http.Request) {
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		remotePath = "."
+	}
+
+	entries, err := sess.FTPClient.List(remotePath)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"path":    remotePath,
+		"entries": entries,
+	})
+}
+
+func (a *API) handleFTPPwd(w http.ResponseWriter, r *http.Request) {
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	pwd, err := sess.FTPClient.CurrentDir()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"pwd": pwd,
+	})
+}
+
+func (a *API) handleFTPCd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var payload struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := sess.FTPClient.ChangeDir(payload.Path); err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	pwd, _ := sess.FTPClient.CurrentDir()
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"pwd": pwd,
+	})
+}
+
+func (a *API) handleFTPDownload(w http.ResponseWriter, r *http.Request) {
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		errorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	reader, err := sess.FTPClient.Download(remotePath)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer reader.Close()
+
+	filename := path.Base(remotePath)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(filename)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	_, _ = io.Copy(w, reader)
+}
+
+func (a *API) handleFTPUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 32MB max in memory
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Failed to parse multipart form: "+err.Error())
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, "No file provided: "+err.Error())
+		return
+	}
+	defer file.Close()
+
+	targetDir := r.FormValue("dir")
+	if targetDir == "" {
+		targetDir = "."
+	}
+
+	remotePath := path.Join(targetDir, header.Filename)
+	if err := sess.FTPClient.Upload(remotePath, file); err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Upload failed: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status": "uploaded",
+		"path":   remotePath,
+	})
+}
+
+func (a *API) handleFTPDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		errorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	isDir, _ := strconv.ParseBool(r.URL.Query().Get("isDir"))
+
+	if err := sess.FTPClient.Delete(remotePath, isDir); err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Delete failed: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status": "deleted",
+		"path":   remotePath,
+	})
+}
+
+func (a *API) handleFTPMkdir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var payload struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if payload.Path == "" {
+		errorResponse(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	if err := sess.FTPClient.MakeDir(payload.Path); err != nil {
+		errorResponse(w, http.StatusInternalServerError, "MakeDir failed: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status": "created",
+		"path":   payload.Path,
+	})
+}

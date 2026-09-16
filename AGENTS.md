@@ -1,4 +1,4 @@
-# Portable SSH & SFTP (portable-ssh-ftp)
+# Portable SSH & FTP (portable-ssh-ftp)
 
 > **インストール不要・単一exeで動く、PuTTY & FFFTPの痒いところを直した閉域本番操作用モダンツール**
 
@@ -17,8 +17,9 @@
 - **対象環境**: 閉域・社内ネットワーク上の本番操作用Windowsホスト（インストール制限あり・PuTTY/FFFTP使用環境）
 - **目指す姿**:
   - 管理者権限不要、レジストリ書き込み不要のポータブル単一 `.exe`（約10〜15MB）。
-  - exeを叩くとEdge/Chromeブラウザが開き、1画面で「SSHターミナル操作」と「SFTPファイルツリー」がシームレスに使える。
+  - exeを叩くとEdge/Chromeブラウザが開き、1画面で「SSHターミナル操作」と「FTPファイルツリー」がシームレスに使える。
   - セッション設定はポータブルなJSON管理。
+  - Shift-JIS / EUC-JP / UTF-8 文字コード対応。
   - Macだけで100%開発・ローカル検証・Windowsクロスコンパイルが完結する。
 
 ---
@@ -37,8 +38,8 @@
    ・net/http + go:embed (ビルド済みフロント静的ファイルを単一バイナリに内包)
    ・gorilla/websocket (ターミナル入出力の双方向ストリーミング)
    ・golang.org/x/crypto/ssh (SSHクライアント・PTY割り当て)
-   ・github.com/pkg/sftp (SFTPファイル操作)
-   │ SSH / SFTP (TCP 22)
+   ・github.com/jlaffaye/ftp (FTPファイル操作: PASV/EPSV, 文字コード変換)
+   │ SSH (TCP 22) / FTP (TCP 21 + PASV)
    ▼
 [接続先サーバー (Linux / 各種ホスト)]
 ```

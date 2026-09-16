@@ -1,12 +1,13 @@
-# 🧰 Portable SSH & SFTP (portable-ssh-ftp)
+# 🧰 Portable SSH & FTP (portable-ssh-ftp)
 
-インストール不要でWindowsで動く、軽量SSH/SFTP操作ツール。  
+インストール不要でWindowsで動く、軽量SSH/FTP操作ツール。  
 PuTTYとFFFTPの「痒いところ」を解消し、閉域本番操作ホストでの快適な作業を実現します。
 
 ## ✨ 特徴
 - **インストール不要・単一exe**: 約10〜15MBの `.exe` 1個をポン置きしてダブルクリックするだけ。
-- **SSH ＋ SFTP 統合画面**: 1回の接続で、左にSFTPツリー、右にSSHターミナルを展開。
+- **SSH ＋ FTP 統合画面**: 接続設定から、左にFTPファイルマネージャー、右にSSHターミナルを展開。
 - **ポータブル設定管理**: レジストリ不要。セッションや設定はローカルJSONで管理。
+- **文字コード対応**: Shift-JIS / EUC-JP / UTF-8 の文字化け防止対応。
 - **Mac完結開発**: Pure Go + React により、Mac上で開発・検証し、コマンド1発でWindows exeを生成可能。
 
 ## 📁 ディレクトリ構成（予定）
@@ -20,7 +21,7 @@ portable-ssh-ftp/
 ├── internal/               # Goバックエンド内部実装
 │   ├── server/             # HTTP / WebSocket サーバー & ブラウザ自動起動
 │   ├── ssh/                # SSH接続・ターミナルPTY中継
-│   └── sftp/               # SFTPファイル一覧・送受信
+│   └── ftp/                # FTPファイル一覧・送受信 (PASV/文字コード変換)
 └── frontend/               # React 19 + TypeScript + Vite + Tailwind
     ├── src/
     │   ├── components/     # Terminal(xterm), FileTree, SessionModal等

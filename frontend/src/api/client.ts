@@ -1,0 +1,114 @@
+import type { ConnectRequest, ConnectResponse, SessionStatus, FtpListResponse } from '../types';
+
+const API_BASE = '/api';
+
+export async function connectSession(req: ConnectRequest): Promise<ConnectResponse> {
+  const res = await fetch(`${API_BASE}/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to connect');
+  }
+  return data;
+}
+
+export async function disconnectSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/disconnect?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || 'Failed to disconnect');
+  }
+}
+
+export async function getStatus(sessionId?: string): Promise<SessionStatus> {
+  const url = sessionId 
+    ? `${API_BASE}/status?sessionId=${encodeURIComponent(sessionId)}` 
+    : `${API_BASE}/status`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error('Failed to get status');
+  }
+  return res.json();
+}
+
+export async function listFtpFiles(sessionId: string, path: string): Promise<FtpListResponse> {
+  const res = await fetch(`${API_BASE}/ftp/list?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to list directory');
+  }
+  return data;
+}
+
+export async function getFtpPwd(sessionId: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/ftp/pwd?sessionId=${encodeURIComponent(sessionId)}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to get current directory');
+  }
+  return data.pwd;
+}
+
+export async function changeFtpDir(sessionId: string, path: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/ftp/cd?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to change directory');
+  }
+  return data.pwd;
+}
+
+export function getDownloadUrl(sessionId: string, path: string): string {
+  return `${API_BASE}/ftp/download?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+}
+
+export async function uploadFtpFile(sessionId: string, targetDir: string, file: File): Promise<void> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('dir', targetDir);
+
+  const res = await fetch(`${API_BASE}/ftp/upload?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to upload file');
+  }
+}
+
+export async function deleteFtpItem(sessionId: string, path: string, isDir: boolean): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/ftp/delete?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}&isDir=${isDir}`,
+    { method: 'DELETE' }
+  );
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to delete item');
+  }
+}
+
+export async function createFtpDir(sessionId: string, path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/ftp/mkdir?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to create directory');
+  }
+}
