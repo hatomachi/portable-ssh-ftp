@@ -109,7 +109,18 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
       }
     }
 
+    // Custom event listener for external input (e.g. RemoteExplorer "cd <path>", FilePreview "cat <file>")
+    const handleTerminalSend = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(customEvent.detail));
+        term.focus();
+      }
+    };
+    window.addEventListener('terminal:send', handleTerminalSend);
+
     return () => {
+      window.removeEventListener('terminal:send', handleTerminalSend);
       resizeObserver.disconnect();
       ws.close();
       term.dispose();

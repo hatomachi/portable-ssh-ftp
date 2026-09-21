@@ -3,8 +3,10 @@ package ssh
 import (
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -20,6 +22,8 @@ type Config struct {
 type Client struct {
 	cfg        Config
 	sshClient  *ssh.Client
+	sftpClient *sftp.Client
+	sftpMu     sync.Mutex
 }
 
 func NewClient(cfg Config) (*Client, error) {
@@ -71,10 +75,45 @@ func NewClient(cfg Config) (*Client, error) {
 }
 
 func (c *Client) Close() error {
+	c.sftpMu.Lock()
+	if c.sftpClient != nil {
+		_ = c.sftpClient.Close()
+		c.sftpClient = nil
+	}
+	c.sftpMu.Unlock()
+
 	if c.sshClient != nil {
 		return c.sshClient.Close()
 	}
 	return nil
+}
+
+func (c *Client) GetSFTPClient() (*sftp.Client, error) {
+	c.sftpMu.Lock()
+	defer c.sftpMu.Unlock()
+
+	if c.sftpClient != nil {
+		return c.sftpClient, nil
+	}
+	if c.sshClient == nil {
+		return nil, fmt.Errorf("ssh client not connected")
+	}
+
+	client, err := sftp.NewClient(c.sshClient)
+	if err != nil {
+		return nil, err
+	}
+	c.sftpClient = client
+	return c.sftpClient, nil
+}
+
+func (c *Client) ResetSFTPClient() {
+	c.sftpMu.Lock()
+	defer c.sftpMu.Unlock()
+	if c.sftpClient != nil {
+		_ = c.sftpClient.Close()
+		c.sftpClient = nil
+	}
 }
 
 func (c *Client) NewSession() (*ssh.Session, error) {

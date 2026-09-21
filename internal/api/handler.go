@@ -32,6 +32,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ftp/upload", a.handleFTPUpload)
 	mux.HandleFunc("/api/ftp/delete", a.handleFTPDelete)
 	mux.HandleFunc("/api/ftp/mkdir", a.handleFTPMkdir)
+
+	mux.HandleFunc("/api/ssh/files", a.handleSSHFiles)
+	mux.HandleFunc("/api/ssh/file/view", a.handleSSHFileView)
+	mux.HandleFunc("GET /api/session/{id}/ssh/files", a.handleSessionSSHFiles)
+	mux.HandleFunc("GET /api/session/{id}/ssh/file/view", a.handleSessionSSHFileView)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -326,3 +331,83 @@ func (a *API) handleFTPMkdir(w http.ResponseWriter, r *http.Request) {
 		"path":   payload.Path,
 	})
 }
+
+func (a *API) getSSHClient(sessionID string) (*session.Session, error) {
+	sess, ok := a.mgr.GetSession(sessionID)
+	if !ok || sess.SSHClient == nil {
+		return nil, fmt.Errorf("SSH not connected")
+	}
+	return sess, nil
+}
+
+func (a *API) handleSSHFiles(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("sessionId")
+	sess, err := a.getSSHClient(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	resolvedPath, entries, err := sess.SSHClient.ListFiles(remotePath)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"path":    resolvedPath,
+		"entries": entries,
+	})
+}
+
+func (a *API) handleSSHFileView(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("sessionId")
+	sess, err := a.getSSHClient(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		errorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	var maxBytes int64 = 65536
+	if mbStr := r.URL.Query().Get("maxBytes"); mbStr != "" {
+		if mb, err := strconv.ParseInt(mbStr, 10, 64); err == nil && mb > 0 {
+			maxBytes = mb
+		}
+	}
+
+	content, totalSize, truncated, err := sess.SSHClient.ReadFileHead(remotePath, maxBytes)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"path":      remotePath,
+		"name":      path.Base(remotePath),
+		"size":      totalSize,
+		"content":   content,
+		"truncated": truncated,
+	})
+}
+
+func (a *API) handleSessionSSHFiles(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("sessionId", r.PathValue("id"))
+	r.URL.RawQuery = q.Encode()
+	a.handleSSHFiles(w, r)
+}
+
+func (a *API) handleSessionSSHFileView(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("sessionId", r.PathValue("id"))
+	r.URL.RawQuery = q.Encode()
+	a.handleSSHFileView(w, r)
+}
+

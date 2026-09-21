@@ -47,3 +47,17 @@ export interface FtpListResponse {
   path: string;
   entries: FileEntry[];
 }
+
+export interface SshListResponse {
+  path: string;
+  entries: FileEntry[];
+}
+
+export interface FilePreviewResponse {
+  path: string;
+  name: string;
+  size: number;
+  content: string;
+  truncated: boolean;
+}
+

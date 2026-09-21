@@ -11,8 +11,8 @@ import type { SessionStatus } from '../types';
 
 interface HeaderProps {
   status: SessionStatus;
-  layout: 'split' | 'terminal' | 'ftp';
-  onLayoutChange: (layout: 'split' | 'terminal' | 'ftp') => void;
+  layout: 'split' | 'terminal' | 'explorer';
+  onLayoutChange: (layout: 'split' | 'terminal' | 'explorer') => void;
   onOpenConnect: () => void;
   onDisconnect: () => void;
   isConnecting: boolean;
@@ -91,10 +91,10 @@ export const Header: React.FC<HeaderProps> = ({
               <Columns className="w-3.5 h-3.5" />
             </button>
             <button
-              title="FTPマネージャー最大化"
-              onClick={() => onLayoutChange('ftp')}
+              title="リモートエクスプローラ最大化"
+              onClick={() => onLayoutChange('explorer')}
               className={`p-1 rounded text-xs transition-colors ${
-                layout === 'ftp' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                layout === 'explorer' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <FolderTree className="w-3.5 h-3.5" />

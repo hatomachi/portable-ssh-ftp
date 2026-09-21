@@ -1,4 +1,11 @@
-import type { ConnectRequest, ConnectResponse, SessionStatus, FtpListResponse } from '../types';
+import type { 
+  ConnectRequest, 
+  ConnectResponse, 
+  SessionStatus, 
+  FtpListResponse, 
+  SshListResponse, 
+  FilePreviewResponse 
+} from '../types';
 
 const API_BASE = '/api';
 
@@ -112,3 +119,22 @@ export async function createFtpDir(sessionId: string, path: string): Promise<voi
     throw new Error(data.error || 'Failed to create directory');
   }
 }
+
+export async function fetchSshFiles(sessionId: string, path: string = ''): Promise<SshListResponse> {
+  const res = await fetch(`${API_BASE}/ssh/files?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to list remote directory');
+  }
+  return data;
+}
+
+export async function viewSshFile(sessionId: string, path: string, maxBytes: number = 65536): Promise<FilePreviewResponse> {
+  const res = await fetch(`${API_BASE}/ssh/file/view?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}&maxBytes=${maxBytes}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to read file preview');
+  }
+  return data;
+}
+

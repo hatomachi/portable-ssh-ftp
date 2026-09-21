@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { ConnectModal } from './components/ConnectModal';
 import { Terminal } from './components/Terminal';
-import { FtpBrowser } from './components/FtpBrowser';
+import { RemoteExplorer } from './components/RemoteExplorer';
 import type { SessionStatus, ConnectRequest } from './types';
 import { connectSession, disconnectSession, getStatus } from './api/client';
 import { Terminal as TerminalIcon, FolderTree, Plug, Shield } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [status, setStatus] = useState<SessionStatus>({ connected: false });
-  const [layout, setLayout] = useState<'split' | 'terminal' | 'ftp'>('split');
+  const [layout, setLayout] = useState<'split' | 'terminal' | 'explorer'>('split');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
 
@@ -44,10 +44,8 @@ export const App: React.FC = () => {
         ftpCharset: req.ftpCharset,
       });
       // Adjust layout based on connected protocols
-      if (res.sshConnected && !res.ftpConnected) {
-        setLayout('terminal');
-      } else if (!res.sshConnected && res.ftpConnected) {
-        setLayout('ftp');
+      if (!res.sshConnected && res.ftpConnected) {
+        setLayout('explorer');
       } else {
         setLayout('split');
       }
@@ -68,6 +66,10 @@ export const App: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const hasExplorer = Boolean(status.sshConnected || status.ftpConnected);
+  const showExplorer = (layout === 'split' || layout === 'explorer') && hasExplorer;
+  const showTerminal = (layout === 'split' || layout === 'terminal') && Boolean(status.sshConnected);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
       <Header
@@ -83,16 +85,20 @@ export const App: React.FC = () => {
       <main className="flex-1 relative overflow-hidden flex">
         {status.connected && status.sessionId ? (
           <div className="w-full h-full flex">
-            {/* FTP Pane */}
-            {(layout === 'split' || layout === 'ftp') && status.ftpConnected && (
-              <div className={`h-full ${layout === 'split' ? 'w-1/2 min-w-[320px]' : 'w-full'}`}>
-                <FtpBrowser sessionId={status.sessionId} />
+            {/* Remote File Explorer Pane (SSH / FTP) */}
+            {showExplorer && (
+              <div className={`h-full ${showTerminal ? 'w-1/2 min-w-[320px]' : 'w-full'}`}>
+                <RemoteExplorer 
+                  sessionId={status.sessionId}
+                  sshConnected={status.sshConnected}
+                  ftpConnected={status.ftpConnected}
+                />
               </div>
             )}
 
             {/* SSH Terminal Pane */}
-            {(layout === 'split' || layout === 'terminal') && status.sshConnected && (
-              <div className={`h-full ${layout === 'split' ? 'flex-1 min-w-[320px]' : 'w-full'}`}>
+            {showTerminal && (
+              <div className={`h-full ${showExplorer ? 'flex-1 min-w-[320px]' : 'w-full'}`}>
                 <Terminal sessionId={status.sessionId} />
               </div>
             )}
