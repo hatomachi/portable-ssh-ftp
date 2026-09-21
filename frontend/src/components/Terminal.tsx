@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Copy, Trash2, Check } from 'lucide-react';
+import { CommandBar } from './CommandBar';
 
 interface TerminalProps {
   sessionId: string;
@@ -13,6 +14,7 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isCommandBarOpen, setIsCommandBarOpen] = useState(true);
 
   useEffect(() => {
     if (!containerRef.current || !sessionId) return;
@@ -119,8 +121,18 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
     };
     window.addEventListener('terminal:send', handleTerminalSend);
 
+    // Global shortcut Ctrl+J / Cmd+J to toggle CommandBar
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'j' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setIsCommandBarOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+
     return () => {
       window.removeEventListener('terminal:send', handleTerminalSend);
+      window.removeEventListener('keydown', handleGlobalKeyDown);
       resizeObserver.disconnect();
       ws.close();
       term.dispose();
@@ -146,6 +158,12 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
     }
   };
 
+  const handleSendCommand = (command: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(new TextEncoder().encode(command));
+    }
+  };
+
   return (
     <div className="flex flex-col h-full w-full bg-[#090d16] relative overflow-hidden">
       {/* Mini toolbar inside terminal */}
@@ -167,7 +185,15 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
         </button>
       </div>
 
-      <div ref={containerRef} className="flex-1 w-full h-full p-2" />
+      {/* Terminal Display Container */}
+      <div ref={containerRef} className="flex-1 w-full min-h-0 p-2" />
+
+      {/* Safe Command Bar at Bottom */}
+      <CommandBar
+        onSend={handleSendCommand}
+        isOpen={isCommandBarOpen}
+        onToggle={() => setIsCommandBarOpen((prev) => !prev)}
+      />
     </div>
   );
 };

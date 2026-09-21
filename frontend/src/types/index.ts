@@ -61,3 +61,21 @@ export interface FilePreviewResponse {
   truncated: boolean;
 }
 
+export interface CommandHistoryItem {
+  id: string;
+  command: string;
+  timestamp: number;
+}
+
+export interface StepRunState {
+  active: boolean;
+  lines: string[];
+  currentIndex: number;
+}
+
+export interface PlaceholderParam {
+  key: string;
+  value: string;
+  count: number;
+}
+
