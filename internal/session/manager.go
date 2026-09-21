@@ -8,17 +8,20 @@ import (
 
 	"portable-ssh-ftp/internal/encoding"
 	"portable-ssh-ftp/internal/ftp"
+	"portable-ssh-ftp/internal/logger"
 	"portable-ssh-ftp/internal/ssh"
 )
 
 type Session struct {
-	ID        string         `json:"id"`
-	Req       ConnectRequest `json:"-"`
-	SSHConfig ssh.Config     `json:"sshConfig"`
-	FTPConfig ftp.Config     `json:"ftpConfig"`
-	SSHClient *ssh.Client    `json:"-"`
-	FTPClient *ftp.Client    `json:"-"`
-	mu        sync.Mutex
+	ID          string                `json:"id"`
+	Req         ConnectRequest        `json:"-"`
+	SSHConfig   ssh.Config            `json:"sshConfig"`
+	FTPConfig   ftp.Config            `json:"ftpConfig"`
+	SSHClient   *ssh.Client           `json:"-"`
+	FTPClient   *ftp.Client           `json:"-"`
+	Logger      *logger.SessionLogger `json:"-"`
+	LogFilePath string                `json:"logFilePath,omitempty"`
+	mu          sync.Mutex
 }
 
 type ConnectRequest struct {
@@ -35,6 +38,8 @@ type ConnectRequest struct {
 	FTPCharset    string     `json:"ftpCharset"`
 	EnableSSH     bool       `json:"enableSsh"`
 	EnableFTP     bool       `json:"enableFtp"`
+	EnableLogging *bool      `json:"enableLogging,omitempty"`
+	LogTimestamp  *bool      `json:"logTimestamp,omitempty"`
 }
 
 type Manager struct {
@@ -117,6 +122,24 @@ func (m *Manager) CreateSession(req ConnectRequest) (*Session, error) {
 		return nil, ftpErr
 	}
 
+	// Initialize session logger if SSH is enabled and logging is active
+	enableLogging := true
+	if req.EnableLogging != nil {
+		enableLogging = *req.EnableLogging
+	}
+	logTimestamp := true
+	if req.LogTimestamp != nil {
+		logTimestamp = *req.LogTimestamp
+	}
+
+	if sess.SSHClient != nil && enableLogging {
+		sessLogger, err := logger.NewSessionLogger(req.Host, sess.SSHConfig.Port, sess.SSHConfig.Username, logTimestamp)
+		if err == nil {
+			sess.Logger = sessLogger
+			sess.LogFilePath = sessLogger.FilePath()
+		}
+	}
+
 	m.sessions[sessionID] = sess
 	m.activeID = sessionID
 
@@ -149,6 +172,11 @@ func (m *Manager) CloseSession(id string) error {
 
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+
+	if sess.Logger != nil {
+		_ = sess.Logger.Close()
+		sess.Logger = nil
+	}
 
 	if sess.SSHClient != nil {
 		_ = sess.SSHClient.Close()
@@ -193,6 +221,7 @@ type SessionSummary struct {
 	FTPPort      int    `json:"ftpPort"`
 	FTPUsername  string `json:"ftpUsername"`
 	FTPCharset   string `json:"ftpCharset"`
+	LogFilePath  string `json:"logFilePath,omitempty"`
 }
 
 func (m *Manager) ListSessions() []SessionSummary {
@@ -211,6 +240,7 @@ func (m *Manager) ListSessions() []SessionSummary {
 			FTPPort:      sess.FTPConfig.Port,
 			FTPUsername:  sess.FTPConfig.Username,
 			FTPCharset:   string(sess.FTPConfig.Charset),
+			LogFilePath:  sess.LogFilePath,
 		})
 	}
 	return summaries

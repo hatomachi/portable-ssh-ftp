@@ -34,6 +34,7 @@ export const App: React.FC = () => {
               ftpPort: s.ftpPort,
               ftpUsername: s.ftpUsername,
               ftpCharset: s.ftpCharset,
+              logFilePath: s.logFilePath,
             },
             layout: (!s.sshConnected && s.ftpConnected) ? 'explorer' : 'split',
           }));
@@ -72,6 +73,7 @@ export const App: React.FC = () => {
         ftpPort: req.ftpPort,
         ftpUsername: req.ftpUsername,
         ftpCharset: req.ftpCharset,
+        logFilePath: res.logFilePath,
       };
       const newTab: SessionTab = {
         id: res.sessionId,
@@ -110,6 +112,7 @@ export const App: React.FC = () => {
         ftpPort: sourceTab?.status.ftpPort,
         ftpUsername: sourceTab?.status.ftpUsername,
         ftpCharset: sourceTab?.status.ftpCharset,
+        logFilePath: res.logFilePath,
       };
 
       const newTab: SessionTab = {
@@ -225,6 +228,7 @@ export const App: React.FC = () => {
                     <Terminal 
                       sessionId={tab.id} 
                       isActive={isActive}
+                      logFilePath={tab.status.logFilePath}
                     />
                   </div>
                 )}

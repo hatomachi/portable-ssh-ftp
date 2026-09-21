@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -108,13 +109,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return ws.WriteMessage(msgType, data)
 	}
 
+	if sess.Logger != nil {
+		logNotice := fmt.Sprintf("\r\n\x1b[38;5;244m📝 Session logging enabled: %s\x1b[0m\r\n", sess.LogFilePath)
+		_ = writeWS(websocket.TextMessage, []byte(logNotice))
+	}
+
 	// SSH -> WebSocket forwarder
 	forwardOutput := func(reader io.Reader) {
 		buf := make([]byte, 4096)
 		for {
 			n, err := reader.Read(buf)
 			if n > 0 {
-				if writeErr := writeWS(websocket.BinaryMessage, buf[:n]); writeErr != nil {
+				data := buf[:n]
+				if sess.Logger != nil {
+					_, _ = sess.Logger.Write(data)
+				}
+				if writeErr := writeWS(websocket.BinaryMessage, data); writeErr != nil {
 					return
 				}
 			}

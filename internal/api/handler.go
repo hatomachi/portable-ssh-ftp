@@ -6,9 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 
+	"portable-ssh-ftp/internal/logger"
 	"portable-ssh-ftp/internal/session"
 )
 
@@ -40,6 +43,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/session/{id}/duplicate", a.handleDuplicateSession)
 	mux.HandleFunc("POST /api/session/duplicate", a.handleDuplicateSession)
 	mux.HandleFunc("GET /api/sessions", a.handleSessions)
+
+	mux.HandleFunc("GET /api/logs", a.handleListLogs)
+	mux.HandleFunc("GET /api/logs/download", a.handleDownloadLog)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -71,10 +77,11 @@ func (a *API) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{
-		"sessionId":   sess.ID,
+		"sessionId":    sess.ID,
 		"sshConnected": sess.SSHClient != nil,
 		"ftpConnected": sess.FTPClient != nil,
-		"host":        req.Host,
+		"host":         req.Host,
+		"logFilePath":  sess.LogFilePath,
 	})
 }
 
@@ -114,6 +121,7 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ftpPort":      sess.FTPConfig.Port,
 		"ftpUsername":  sess.FTPConfig.Username,
 		"ftpCharset":   sess.FTPConfig.Charset,
+		"logFilePath":  sess.LogFilePath,
 	})
 }
 
@@ -450,6 +458,7 @@ func (a *API) handleDuplicateSession(w http.ResponseWriter, r *http.Request) {
 		"ftpPort":      sess.FTPConfig.Port,
 		"ftpUsername":  sess.FTPConfig.Username,
 		"ftpCharset":   sess.FTPConfig.Charset,
+		"logFilePath":  sess.LogFilePath,
 	})
 }
 
@@ -463,5 +472,50 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"sessions": summaries,
 	})
+}
+
+func (a *API) handleListLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	logs, err := logger.ListLogs()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Failed to list logs: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"logs": logs,
+	})
+}
+
+func (a *API) handleDownloadLog(w http.ResponseWriter, r *http.Request) {
+	fileName := r.URL.Query().Get("file")
+	if fileName == "" {
+		errorResponse(w, http.StatusBadRequest, "file parameter is required")
+		return
+	}
+
+	// Prevent path traversal
+	safeName := filepath.Base(fileName)
+	targetPath := filepath.Join("logs", safeName)
+
+	file, err := os.Open(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			errorResponse(w, http.StatusNotFound, "Log file not found")
+			return
+		}
+		errorResponse(w, http.StatusInternalServerError, "Failed to open log file: "+err.Error())
+		return
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(safeName)))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	_, _ = io.Copy(w, file)
 }
 

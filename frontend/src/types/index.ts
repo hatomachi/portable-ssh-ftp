@@ -12,6 +12,8 @@ export interface ConnectRequest {
   ftpCharset: 'UTF-8' | 'Shift-JIS' | 'EUC-JP';
   enableSsh: boolean;
   enableFtp: boolean;
+  enableLogging?: boolean;
+  logTimestamp?: boolean;
 }
 
 export interface ConnectResponse {
@@ -19,6 +21,7 @@ export interface ConnectResponse {
   sshConnected: boolean;
   ftpConnected: boolean;
   host: string;
+  logFilePath?: string;
 }
 
 export interface SessionStatus {
@@ -32,6 +35,7 @@ export interface SessionStatus {
   ftpPort?: number;
   ftpUsername?: string;
   ftpCharset?: string;
+  logFilePath?: string;
 }
 
 export interface FileEntry {
@@ -96,5 +100,13 @@ export interface SessionSummary {
   ftpPort: number;
   ftpUsername: string;
   ftpCharset: string;
+  logFilePath?: string;
+}
+
+export interface LogInfo {
+  name: string;
+  path: string;
+  size: number;
+  modTime: string;
 }
 

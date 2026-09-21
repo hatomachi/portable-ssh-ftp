@@ -7,7 +7,8 @@ import {
   Server, 
   Eye, 
   EyeOff, 
-  UploadCloud 
+  UploadCloud,
+  FileText
 } from 'lucide-react';
 import type { ConnectRequest } from '../types';
 
@@ -43,6 +44,10 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
   const [ftpPassive, setFtpPassive] = useState(true);
   const [ftpCharset, setFtpCharset] = useState<'UTF-8' | 'Shift-JIS' | 'EUC-JP'>('Shift-JIS');
 
+  // Evidence & Logging settings
+  const [enableLogging, setEnableLogging] = useState(true);
+  const [logTimestamp, setLogTimestamp] = useState(true);
+
   // Shared credential helper
   const [syncCredentials, setSyncCredentials] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
@@ -64,6 +69,8 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
         setFtpPassive(data.ftpPassive ?? true);
         setFtpCharset(data.ftpCharset || 'Shift-JIS');
         setEnableFtp(data.enableFtp ?? true);
+        setEnableLogging(data.enableLogging ?? true);
+        setLogTimestamp(data.logTimestamp ?? true);
       }
     } catch {
       // ignore
@@ -124,6 +131,8 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
       ftpCharset,
       enableSsh,
       enableFtp,
+      enableLogging,
+      logTimestamp,
     };
 
     try {
@@ -139,6 +148,8 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
         ftpPassive: payload.ftpPassive,
         ftpCharset: payload.ftpCharset,
         enableFtp: payload.enableFtp,
+        enableLogging: payload.enableLogging,
+        logTimestamp: payload.logTimestamp,
       }));
       onClose();
     } catch (err: any) {
@@ -425,6 +436,39 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Evidence & Logging Settings Box */}
+          <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-slate-200 font-medium">
+                <FileText className="w-4 h-4 text-amber-400" />
+                <span>エビデンス ＆ 自動ロギング設定</span>
+              </div>
+              <label className="flex items-center space-x-1.5 text-[11px] cursor-pointer text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={enableLogging}
+                  onChange={(e) => setEnableLogging(e.target.checked)}
+                  className="rounded accent-amber-500"
+                />
+                <span>ターミナル全入出力を logs/ に自動保存</span>
+              </label>
+            </div>
+            {enableLogging && (
+              <div className="flex items-center justify-between pl-6 pt-1.5 text-slate-400 text-[11px] border-t border-slate-900">
+                <span>行頭にタイムスタンプ [YYYY-MM-DD HH:mm:ss] を付与する（エビデンス用）</span>
+                <label className="flex items-center space-x-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={logTimestamp}
+                    onChange={(e) => setLogTimestamp(e.target.checked)}
+                    className="rounded accent-amber-500"
+                  />
+                  <span className="text-slate-300">有効</span>
+                </label>
+              </div>
+            )}
           </div>
 
           {/* Footer Actions */}

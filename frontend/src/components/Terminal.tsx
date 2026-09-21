@@ -1,22 +1,55 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { Copy, Trash2, Check } from 'lucide-react';
+import { Copy, Trash2, Check, FileCode } from 'lucide-react';
 import { CommandBar } from './CommandBar';
+import { extractLastCommandAndOutput, formatAsMarkdownCodeBlock } from '../utils/terminalEvidence';
 
 interface TerminalProps {
   sessionId: string;
   isActive?: boolean;
+  logFilePath?: string;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true }) => {
+export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true, logFilePath }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const isActiveRef = useRef(isActive);
   const [copied, setCopied] = useState(false);
+  const [evidenceCopied, setEvidenceCopied] = useState(false);
+  const [logPathCopied, setLogPathCopied] = useState(false);
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(true);
+
+  const copyLastCommandMarkdown = useCallback(() => {
+    if (!xtermRef.current) return;
+    const extracted = extractLastCommandAndOutput(xtermRef.current);
+    if (!extracted) return;
+    const markdown = formatAsMarkdownCodeBlock(extracted, 'bash');
+    navigator.clipboard.writeText(markdown);
+    setEvidenceCopied(true);
+    setTimeout(() => setEvidenceCopied(false), 2000);
+  }, []);
+
+  const copyAllText = useCallback(() => {
+    if (!xtermRef.current) return;
+    const term = xtermRef.current;
+    term.selectAll();
+    const text = term.getSelection();
+    term.clearSelection();
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, []);
+
+  const handleCopyLogPath = useCallback(() => {
+    if (logFilePath) {
+      navigator.clipboard.writeText(logFilePath);
+      setLogPathCopied(true);
+      setTimeout(() => setLogPathCopied(false), 2000);
+    }
+  }, [logFilePath]);
 
   useEffect(() => {
     isActiveRef.current = isActive;
@@ -143,12 +176,20 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true }
     };
     window.addEventListener('terminal:send', handleTerminalSend);
 
-    // Global shortcut Ctrl+J / Cmd+J to toggle CommandBar
+    // Global keyboard shortcuts:
+    // - Ctrl+J / Cmd+J: toggle CommandBar
+    // - Ctrl+Shift+C / Cmd+Shift+C: copy last command & output as Markdown
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (!isActiveRef.current) return;
       if (e.key === 'j' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         setIsCommandBarOpen((prev) => !prev);
+        return;
+      }
+      if ((e.key === 'C' || e.code === 'KeyC') && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault();
+        copyLastCommandMarkdown();
+        return;
       }
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
@@ -162,18 +203,7 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true }
       xtermRef.current = null;
       wsRef.current = null;
     };
-  }, [sessionId]);
-
-  const copyAllText = () => {
-    if (!xtermRef.current) return;
-    const term = xtermRef.current;
-    term.selectAll();
-    const text = term.getSelection();
-    term.clearSelection();
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  }, [sessionId, copyLastCommandMarkdown]);
 
   const clearScreen = () => {
     if (xtermRef.current) {
@@ -190,15 +220,47 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true }
   return (
     <div className="flex flex-col h-full w-full bg-[#090d16] relative overflow-hidden">
       {/* Mini toolbar inside terminal */}
-      <div className="absolute top-2 right-4 z-10 flex items-center space-x-1.5 bg-slate-900/80 backdrop-blur-xs p-1 rounded border border-slate-800 opacity-40 hover:opacity-100 transition-opacity text-xs">
+      <div className="absolute top-2 right-4 z-10 flex items-center space-x-1.5 bg-slate-900/90 backdrop-blur-xs px-2 py-1 rounded-lg border border-slate-800 opacity-60 hover:opacity-100 transition-opacity text-xs shadow-md">
+        {/* Logging indicator badge */}
+        {logFilePath && (
+          <button
+            onClick={handleCopyLogPath}
+            title={`セッションログ保存中 (クリックでパスコピー): ${logFilePath}`}
+            className="mr-1 px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-800/60 text-emerald-400 hover:bg-emerald-900/70 transition-colors flex items-center space-x-1 text-[10px]"
+          >
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+            </span>
+            <span className="font-mono truncate max-w-[130px]">
+              {logPathCopied ? 'パスコピー済!' : logFilePath.replace(/^logs\//, '')}
+            </span>
+          </button>
+        )}
+
+        {/* Copy Last Command & Output as Markdown (Warp-like block copy) */}
+        <button
+          onClick={copyLastCommandMarkdown}
+          title="直前コマンドと出力をMarkdownでコピー (Ctrl+Shift+C / テキスト選択時は選択範囲をコピー)"
+          className="px-2 py-1 rounded bg-sky-950/60 text-sky-400 hover:bg-sky-900/70 border border-sky-800/60 transition-colors flex items-center space-x-1 font-medium"
+        >
+          {evidenceCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <FileCode className="w-3.5 h-3.5" />}
+          <span className="text-[10px]">
+            {evidenceCopied ? 'MDコピー完了!' : '直前出力をMDコピー'}
+          </span>
+        </button>
+
+        {/* Copy All Raw Text */}
         <button
           onClick={copyAllText}
-          title="全ログをクリップボードにコピー（エビデンス取得）"
-          className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors flex items-center space-x-1"
+          title="画面ログ全体をクリップボードにコピー"
+          className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors flex items-center space-x-1"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-          <span className="text-[10px]">{copied ? 'コピー完了' : 'ログ全コピー'}</span>
+          <span className="text-[10px]">{copied ? '完了' : '全コピー'}</span>
         </button>
+
+        {/* Clear screen */}
         <button
           onClick={clearScreen}
           title="画面クリア"
