@@ -37,6 +37,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ssh/file/view", a.handleSSHFileView)
 	mux.HandleFunc("GET /api/session/{id}/ssh/files", a.handleSessionSSHFiles)
 	mux.HandleFunc("GET /api/session/{id}/ssh/file/view", a.handleSessionSSHFileView)
+	mux.HandleFunc("POST /api/session/{id}/duplicate", a.handleDuplicateSession)
+	mux.HandleFunc("POST /api/session/duplicate", a.handleDuplicateSession)
+	mux.HandleFunc("GET /api/sessions", a.handleSessions)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -409,5 +412,56 @@ func (a *API) handleSessionSSHFileView(w http.ResponseWriter, r *http.Request) {
 	q.Set("sessionId", r.PathValue("id"))
 	r.URL.RawQuery = q.Encode()
 	a.handleSSHFileView(w, r)
+}
+
+func (a *API) handleDuplicateSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		sessionID = r.URL.Query().Get("sessionId")
+	}
+	if sessionID == "" {
+		// Attempt to read from JSON body if present
+		var body struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.SessionID != "" {
+			sessionID = body.SessionID
+		}
+	}
+
+	sess, err := a.mgr.DuplicateSession(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Failed to duplicate session: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"sessionId":    sess.ID,
+		"sshConnected": sess.SSHClient != nil,
+		"ftpConnected": sess.FTPClient != nil,
+		"host":         sess.Req.Host,
+		"sshPort":      sess.SSHConfig.Port,
+		"sshUsername":  sess.SSHConfig.Username,
+		"ftpPort":      sess.FTPConfig.Port,
+		"ftpUsername":  sess.FTPConfig.Username,
+		"ftpCharset":   sess.FTPConfig.Charset,
+	})
+}
+
+func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	summaries := a.mgr.ListSessions()
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"sessions": summaries,
+	})
 }
 

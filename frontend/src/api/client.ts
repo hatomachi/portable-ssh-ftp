@@ -4,7 +4,8 @@ import type {
   SessionStatus, 
   FtpListResponse, 
   SshListResponse, 
-  FilePreviewResponse 
+  FilePreviewResponse,
+  SessionSummary
 } from '../types';
 
 const API_BASE = '/api';
@@ -136,5 +137,25 @@ export async function viewSshFile(sessionId: string, path: string, maxBytes: num
     throw new Error(data.error || 'Failed to read file preview');
   }
   return data;
+}
+
+export async function duplicateSession(sessionId: string): Promise<ConnectResponse> {
+  const res = await fetch(`${API_BASE}/session/${encodeURIComponent(sessionId)}/duplicate`, {
+    method: 'POST',
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to duplicate session');
+  }
+  return data;
+}
+
+export async function listSessions(): Promise<SessionSummary[]> {
+  const res = await fetch(`${API_BASE}/sessions`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to list sessions');
+  }
+  return data.sessions || [];
 }
 

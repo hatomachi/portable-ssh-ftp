@@ -6,15 +6,36 @@ import { CommandBar } from './CommandBar';
 
 interface TerminalProps {
   sessionId: string;
+  isActive?: boolean;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
+export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const isActiveRef = useRef(isActive);
   const [copied, setCopied] = useState(false);
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(true);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    if (isActive && fitAddonRef.current) {
+      try {
+        fitAddonRef.current.fit();
+        if (xtermRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'resize',
+            cols: xtermRef.current.cols,
+            rows: xtermRef.current.rows,
+          }));
+        }
+        xtermRef.current?.focus();
+      } catch {
+        // ignore
+      }
+    }
+  }, [isActive]);
 
   useEffect(() => {
     if (!containerRef.current || !sessionId) return;
@@ -113,6 +134,7 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
 
     // Custom event listener for external input (e.g. RemoteExplorer "cd <path>", FilePreview "cat <file>")
     const handleTerminalSend = (e: Event) => {
+      if (!isActiveRef.current) return;
       const customEvent = e as CustomEvent<string>;
       if (customEvent.detail && ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(customEvent.detail));
@@ -123,6 +145,7 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId }) => {
 
     // Global shortcut Ctrl+J / Cmd+J to toggle CommandBar
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (!isActiveRef.current) return;
       if (e.key === 'j' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         setIsCommandBarOpen((prev) => !prev);

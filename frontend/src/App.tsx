@@ -1,24 +1,45 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Header } from './components/Header';
+import { TabBar } from './components/TabBar';
 import { ConnectModal } from './components/ConnectModal';
 import { Terminal } from './components/Terminal';
 import { RemoteExplorer } from './components/RemoteExplorer';
-import type { SessionStatus, ConnectRequest } from './types';
-import { connectSession, disconnectSession, getStatus } from './api/client';
+import type { SessionStatus, ConnectRequest, SessionTab } from './types';
+import { connectSession, disconnectSession, duplicateSession, listSessions } from './api/client';
 import { Terminal as TerminalIcon, FolderTree, Plug, Shield } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const [status, setStatus] = useState<SessionStatus>({ connected: false });
-  const [layout, setLayout] = useState<'split' | 'terminal' | 'explorer'>('split');
+  const [tabs, setTabs] = useState<SessionTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isDuplicating, setIsDuplicating] = useState(false);
 
   // Check current backend status on mount
   useEffect(() => {
-    getStatus()
-      .then((s) => {
-        setStatus(s);
-        if (!s.connected) {
+    listSessions()
+      .then((sessions) => {
+        if (sessions && sessions.length > 0) {
+          const restoredTabs: SessionTab[] = sessions.map((s, idx) => ({
+            id: s.id,
+            title: `${s.host} (${idx + 1})`,
+            status: {
+              connected: true,
+              sessionId: s.id,
+              sshConnected: s.sshConnected,
+              ftpConnected: s.ftpConnected,
+              host: s.host,
+              sshPort: s.sshPort,
+              sshUsername: s.sshUsername,
+              ftpPort: s.ftpPort,
+              ftpUsername: s.ftpUsername,
+              ftpCharset: s.ftpCharset,
+            },
+            layout: (!s.sshConnected && s.ftpConnected) ? 'explorer' : 'split',
+          }));
+          setTabs(restoredTabs);
+          setActiveTabId(restoredTabs[0].id);
+        } else {
           setIsModalOpen(true);
         }
       })
@@ -27,11 +48,20 @@ export const App: React.FC = () => {
       });
   }, []);
 
+  const activeTab = useMemo(() => {
+    return tabs.find((t) => t.id === activeTabId) || tabs[0];
+  }, [tabs, activeTabId]);
+
+  const activeStatus: SessionStatus = activeTab ? activeTab.status : { connected: false };
+  const activeLayout = activeTab ? activeTab.layout : 'split';
+
   const handleConnect = async (req: ConnectRequest) => {
     setIsConnecting(true);
     try {
       const res = await connectSession(req);
-      setStatus({
+      const sameHostCount = tabs.filter((t) => t.status.host === req.host).length;
+      const title = `${req.host} (${sameHostCount + 1})`;
+      const newStatus: SessionStatus = {
         connected: true,
         sessionId: res.sessionId,
         sshConnected: res.sshConnected,
@@ -42,67 +72,165 @@ export const App: React.FC = () => {
         ftpPort: req.ftpPort,
         ftpUsername: req.ftpUsername,
         ftpCharset: req.ftpCharset,
-      });
-      // Adjust layout based on connected protocols
-      if (!res.sshConnected && res.ftpConnected) {
-        setLayout('explorer');
-      } else {
-        setLayout('split');
-      }
+      };
+      const newTab: SessionTab = {
+        id: res.sessionId,
+        title,
+        status: newStatus,
+        layout: (!res.sshConnected && res.ftpConnected) ? 'explorer' : 'split',
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(res.sessionId);
+      setIsModalOpen(false);
     } finally {
       setIsConnecting(false);
     }
   };
 
-  const handleDisconnect = async () => {
-    if (status.sessionId) {
-      try {
-        await disconnectSession(status.sessionId);
-      } catch {
-        // ignore
-      }
+  const handleDuplicateTab = async (sourceSessionId?: string) => {
+    const sid = sourceSessionId || activeTabId;
+    if (!sid) return;
+
+    setIsDuplicating(true);
+    try {
+      const res = await duplicateSession(sid);
+      const sourceTab = tabs.find((t) => t.id === sid) || activeTab;
+      const host = res.host || sourceTab?.status.host || 'remote';
+      const sameHostCount = tabs.filter((t) => t.status.host === host).length;
+      const title = `${host} (${sameHostCount + 1})`;
+
+      const newStatus: SessionStatus = {
+        connected: true,
+        sessionId: res.sessionId,
+        sshConnected: res.sshConnected,
+        ftpConnected: res.ftpConnected,
+        host,
+        sshPort: sourceTab?.status.sshPort,
+        sshUsername: sourceTab?.status.sshUsername,
+        ftpPort: sourceTab?.status.ftpPort,
+        ftpUsername: sourceTab?.status.ftpUsername,
+        ftpCharset: sourceTab?.status.ftpCharset,
+      };
+
+      const newTab: SessionTab = {
+        id: res.sessionId,
+        title,
+        status: newStatus,
+        layout: sourceTab?.layout || 'split',
+      };
+
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(res.sessionId);
+    } catch (err: any) {
+      alert(`セッション複製に失敗しました: ${err.message || err}`);
+    } finally {
+      setIsDuplicating(false);
     }
-    setStatus({ connected: false });
-    setIsModalOpen(true);
   };
 
-  const hasExplorer = Boolean(status.sshConnected || status.ftpConnected);
-  const showExplorer = (layout === 'split' || layout === 'explorer') && hasExplorer;
-  const showTerminal = (layout === 'split' || layout === 'terminal') && Boolean(status.sshConnected);
+  const handleCloseTab = async (tabId: string) => {
+    try {
+      await disconnectSession(tabId);
+    } catch {
+      // ignore
+    }
+
+    setTabs((prev) => {
+      const remaining = prev.filter((t) => t.id !== tabId);
+      if (activeTabId === tabId) {
+        if (remaining.length > 0) {
+          const closedIdx = prev.findIndex((t) => t.id === tabId);
+          const nextIdx = Math.max(0, closedIdx - 1);
+          setActiveTabId(remaining[nextIdx]?.id || remaining[0].id);
+        } else {
+          setActiveTabId('');
+        }
+      }
+      return remaining;
+    });
+  };
+
+  const handleDisconnectCurrent = async () => {
+    if (activeTabId) {
+      await handleCloseTab(activeTabId);
+    }
+  };
+
+  const handleRenameTab = (tabId: string, newTitle: string) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, title: newTitle } : t))
+    );
+  };
+
+  const handleLayoutChange = (layout: 'split' | 'terminal' | 'explorer') => {
+    if (!activeTabId) return;
+    setTabs((prev) =>
+      prev.map((t) => (t.id === activeTabId ? { ...t, layout } : t))
+    );
+  };
+
+  const hasTabs = tabs.length > 0;
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
       <Header
-        status={status}
-        layout={layout}
-        onLayoutChange={setLayout}
+        status={activeStatus}
+        layout={activeLayout}
+        onLayoutChange={handleLayoutChange}
         onOpenConnect={() => setIsModalOpen(true)}
-        onDisconnect={handleDisconnect}
+        onDisconnect={handleDisconnectCurrent}
         isConnecting={isConnecting}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 relative overflow-hidden flex">
-        {status.connected && status.sessionId ? (
-          <div className="w-full h-full flex">
-            {/* Remote File Explorer Pane (SSH / FTP) */}
-            {showExplorer && (
-              <div className={`h-full ${showTerminal ? 'w-1/2 min-w-[320px]' : 'w-full'}`}>
-                <RemoteExplorer 
-                  sessionId={status.sessionId}
-                  sshConnected={status.sshConnected}
-                  ftpConnected={status.ftpConnected}
-                />
-              </div>
-            )}
+      {/* Tab Bar for Multi-session management */}
+      <TabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onSelectTab={setActiveTabId}
+        onCloseTab={handleCloseTab}
+        onDuplicateTab={handleDuplicateTab}
+        onNewConnection={() => setIsModalOpen(true)}
+        onRenameTab={handleRenameTab}
+        isDuplicating={isDuplicating}
+      />
 
-            {/* SSH Terminal Pane */}
-            {showTerminal && (
-              <div className={`h-full ${showExplorer ? 'flex-1 min-w-[320px]' : 'w-full'}`}>
-                <Terminal sessionId={status.sessionId} />
+      {/* Main Content Area */}
+      <main className="flex-1 relative overflow-hidden flex flex-col">
+        {hasTabs ? (
+          tabs.map((tab) => {
+            const isActive = tab.id === activeTabId;
+            const hasExplorer = Boolean(tab.status.sshConnected || tab.status.ftpConnected);
+            const showExplorer = (tab.layout === 'split' || tab.layout === 'explorer') && hasExplorer;
+            const showTerminal = (tab.layout === 'split' || tab.layout === 'terminal') && Boolean(tab.status.sshConnected);
+
+            return (
+              <div
+                key={tab.id}
+                className={`w-full h-full flex ${isActive ? '' : 'hidden'}`}
+              >
+                {/* Remote File Explorer Pane (SSH / FTP) */}
+                {showExplorer && (
+                  <div className={`h-full ${showTerminal ? 'w-1/2 min-w-[320px]' : 'w-full'}`}>
+                    <RemoteExplorer
+                      sessionId={tab.id}
+                      sshConnected={tab.status.sshConnected}
+                      ftpConnected={tab.status.ftpConnected}
+                    />
+                  </div>
+                )}
+
+                {/* SSH Terminal Pane */}
+                {showTerminal && (
+                  <div className={`h-full ${showExplorer ? 'flex-1 min-w-[320px]' : 'w-full'}`}>
+                    <Terminal 
+                      sessionId={tab.id} 
+                      isActive={isActive}
+                    />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            );
+          })
         ) : (
           /* Welcome & Idle Screen */
           <div className="flex-1 flex flex-col items-center justify-center p-6 text-center select-none bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(56,189,248,0.15),rgba(255,255,255,0))]">

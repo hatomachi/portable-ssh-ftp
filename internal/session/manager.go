@@ -12,11 +12,12 @@ import (
 )
 
 type Session struct {
-	ID        string      `json:"id"`
-	SSHConfig ssh.Config  `json:"sshConfig"`
-	FTPConfig ftp.Config  `json:"ftpConfig"`
-	SSHClient *ssh.Client `json:"-"`
-	FTPClient *ftp.Client `json:"-"`
+	ID        string         `json:"id"`
+	Req       ConnectRequest `json:"-"`
+	SSHConfig ssh.Config     `json:"sshConfig"`
+	FTPConfig ftp.Config     `json:"ftpConfig"`
+	SSHClient *ssh.Client    `json:"-"`
+	FTPClient *ftp.Client    `json:"-"`
 	mu        sync.Mutex
 }
 
@@ -62,7 +63,8 @@ func (m *Manager) CreateSession(req ConnectRequest) (*Session, error) {
 
 	sessionID := generateID()
 	sess := &Session{
-		ID: sessionID,
+		ID:  sessionID,
+		Req: req,
 		SSHConfig: ssh.Config{
 			Host:          req.Host,
 			Port:          req.SSHPort,
@@ -162,6 +164,56 @@ func (m *Manager) CloseSession(id string) error {
 		m.activeID = ""
 	}
 	return nil
+}
+
+func (m *Manager) DuplicateSession(id string) (*Session, error) {
+	m.mu.RLock()
+	if id == "" || id == "active" {
+		id = m.activeID
+	}
+
+	target, ok := m.sessions[id]
+	if !ok {
+		m.mu.RUnlock()
+		return nil, fmt.Errorf("session not found: %s", id)
+	}
+	req := target.Req
+	m.mu.RUnlock()
+
+	return m.CreateSession(req)
+}
+
+type SessionSummary struct {
+	ID           string `json:"id"`
+	Host         string `json:"host"`
+	SSHConnected bool   `json:"sshConnected"`
+	FTPConnected bool   `json:"ftpConnected"`
+	SSHPort      int    `json:"sshPort"`
+	SSHUsername  string `json:"sshUsername"`
+	FTPPort      int    `json:"ftpPort"`
+	FTPUsername  string `json:"ftpUsername"`
+	FTPCharset   string `json:"ftpCharset"`
+}
+
+func (m *Manager) ListSessions() []SessionSummary {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	summaries := make([]SessionSummary, 0, len(m.sessions))
+	for _, sess := range m.sessions {
+		summaries = append(summaries, SessionSummary{
+			ID:           sess.ID,
+			Host:         sess.Req.Host,
+			SSHConnected: sess.SSHClient != nil,
+			FTPConnected: sess.FTPClient != nil,
+			SSHPort:      sess.SSHConfig.Port,
+			SSHUsername:  sess.SSHConfig.Username,
+			FTPPort:      sess.FTPConfig.Port,
+			FTPUsername:  sess.FTPConfig.Username,
+			FTPCharset:   string(sess.FTPConfig.Charset),
+		})
+	}
+	return summaries
 }
 
 func generateID() string {

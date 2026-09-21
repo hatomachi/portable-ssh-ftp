@@ -79,3 +79,22 @@ export interface PlaceholderParam {
   count: number;
 }
 
+export interface SessionTab {
+  id: string; // sessionId
+  title: string;
+  status: SessionStatus;
+  layout: 'split' | 'terminal' | 'explorer';
+}
+
+export interface SessionSummary {
+  id: string;
+  host: string;
+  sshConnected: boolean;
+  ftpConnected: boolean;
+  sshPort: number;
+  sshUsername: string;
+  ftpPort: number;
+  ftpUsername: string;
+  ftpCharset: string;
+}
+
