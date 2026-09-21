@@ -5,7 +5,8 @@ import type {
   FtpListResponse, 
   SshListResponse, 
   FilePreviewResponse,
-  SessionSummary
+  SessionSummary,
+  ConnectionProfile
 } from '../types';
 
 const API_BASE = '/api';
@@ -158,4 +159,37 @@ export async function listSessions(): Promise<SessionSummary[]> {
   }
   return data.sessions || [];
 }
+
+export async function listProfiles(): Promise<ConnectionProfile[]> {
+  const res = await fetch(`${API_BASE}/profiles`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to list profiles');
+  }
+  return data.profiles || [];
+}
+
+export async function saveProfile(profile: Partial<ConnectionProfile>): Promise<ConnectionProfile> {
+  const res = await fetch(`${API_BASE}/profiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(profile),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to save profile');
+  }
+  return data.profile;
+}
+
+export async function deleteProfile(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/profiles?id=${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || 'Failed to delete profile');
+  }
+}
+
 

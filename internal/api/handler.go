@@ -11,16 +11,21 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"portable-ssh-ftp/internal/config"
 	"portable-ssh-ftp/internal/logger"
 	"portable-ssh-ftp/internal/session"
 )
 
 type API struct {
-	mgr *session.Manager
+	mgr          *session.Manager
+	profileStore *config.ProfileStore
 }
 
-func NewAPI(mgr *session.Manager) *API {
-	return &API{mgr: mgr}
+func NewAPI(mgr *session.Manager, profileStore *config.ProfileStore) *API {
+	if profileStore == nil {
+		profileStore = config.NewProfileStore("")
+	}
+	return &API{mgr: mgr, profileStore: profileStore}
 }
 
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
@@ -46,6 +51,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/logs", a.handleListLogs)
 	mux.HandleFunc("GET /api/logs/download", a.handleDownloadLog)
+
+	mux.HandleFunc("GET /api/profiles", a.handleListProfiles)
+	mux.HandleFunc("POST /api/profiles", a.handleSaveProfile)
+	mux.HandleFunc("DELETE /api/profiles", a.handleDeleteProfile)
+	mux.HandleFunc("DELETE /api/profiles/{id}", a.handleDeleteProfile)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -518,4 +528,56 @@ func (a *API) handleDownloadLog(w http.ResponseWriter, r *http.Request) {
 
 	_, _ = io.Copy(w, file)
 }
+
+func (a *API) handleListProfiles(w http.ResponseWriter, r *http.Request) {
+	profiles, err := a.profileStore.List()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Failed to list profiles: "+err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"profiles": profiles,
+	})
+}
+
+func (a *API) handleSaveProfile(w http.ResponseWriter, r *http.Request) {
+	var p config.Profile
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid profile payload: "+err.Error())
+		return
+	}
+
+	if p.Name == "" {
+		p.Name = p.Host
+	}
+
+	saved, err := a.profileStore.Save(p)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Failed to save profile: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"profile": saved,
+	})
+}
+
+func (a *API) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		id = r.URL.Query().Get("id")
+	}
+	if id == "" {
+		errorResponse(w, http.StatusBadRequest, "Profile ID is required")
+		return
+	}
+
+	if err := a.profileStore.Delete(id); err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Failed to delete profile: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 

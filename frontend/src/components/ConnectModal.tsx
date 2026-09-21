@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   X, 
   Terminal, 
@@ -8,9 +8,15 @@ import {
   Eye, 
   EyeOff, 
   UploadCloud,
-  FileText
+  FileText,
+  Bookmark,
+  Save,
+  Trash2,
+  Check,
+  Plus
 } from 'lucide-react';
-import type { ConnectRequest } from '../types';
+import type { ConnectRequest, ConnectionProfile } from '../types';
+import { listProfiles, saveProfile, deleteProfile } from '../api/client';
 
 interface ConnectModalProps {
   isOpen: boolean;
@@ -19,12 +25,21 @@ interface ConnectModalProps {
 }
 
 const STORAGE_KEY = 'portable_ssh_ftp_last_config';
+const LAST_PROFILE_KEY = 'portable_ssh_ftp_last_profile_id';
 
 export const ConnectModal: React.FC<ConnectModalProps> = ({
   isOpen,
   onClose,
   onConnect,
 }) => {
+  // Profiles state
+  const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+  const [profileName, setProfileName] = useState<string>('');
+  const [savePassword, setSavePassword] = useState<boolean>(false);
+  const [isSavingProfile, setIsSavingProfile] = useState<boolean>(false);
+  const [profileNotice, setProfileNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   const [host, setHost] = useState('');
   
   // SSH settings
@@ -54,30 +69,180 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load saved config
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const data = JSON.parse(saved);
-        setHost(data.host || '');
-        setSshPort(data.sshPort || 22);
-        setSshUsername(data.sshUsername || '');
-        setEnableSsh(data.enableSsh ?? true);
-        setFtpPort(data.ftpPort || 21);
-        setFtpUsername(data.ftpUsername || '');
-        setFtpPassive(data.ftpPassive ?? true);
-        setFtpCharset(data.ftpCharset || 'Shift-JIS');
-        setEnableFtp(data.enableFtp ?? true);
-        setEnableLogging(data.enableLogging ?? true);
-        setLogTimestamp(data.logTimestamp ?? true);
-      }
-    } catch {
-      // ignore
+  // Apply a profile's values to form state
+  const applyProfile = useCallback((p: ConnectionProfile) => {
+    setSelectedProfileId(p.id);
+    setProfileName(p.name);
+    setHost(p.host || '');
+    setSshPort(p.sshPort || 22);
+    setSshUsername(p.sshUsername || '');
+    setSshAuthType(p.sshAuthType || 'password');
+    setSshPrivateKey(p.sshPrivateKey || '');
+    setSshPassphrase(p.sshPassphrase || '');
+    setFtpPort(p.ftpPort || 21);
+    setFtpUsername(p.ftpUsername || '');
+    setFtpPassive(p.ftpPassive ?? true);
+    setFtpCharset(p.ftpCharset || 'Shift-JIS');
+    setEnableSsh(p.enableSsh ?? true);
+    setEnableFtp(p.enableFtp ?? true);
+    setEnableLogging(p.enableLogging ?? true);
+    setLogTimestamp(p.logTimestamp ?? true);
+    setSavePassword(p.savePassword ?? false);
+
+    if (p.savePassword) {
+      setSshPassword(p.sshPassword || '');
+      setFtpPassword(p.ftpPassword || '');
+    } else {
+      setSshPassword('');
+      setFtpPassword('');
     }
   }, []);
 
+  // Fetch profiles on mount or open
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let isMounted = true;
+    listProfiles()
+      .then((loadedProfiles) => {
+        if (!isMounted) return;
+        setProfiles(loadedProfiles);
+
+        const lastProfileId = localStorage.getItem(LAST_PROFILE_KEY);
+        const matched = loadedProfiles.find((p) => p.id === lastProfileId);
+
+        if (matched) {
+          applyProfile(matched);
+        } else if (loadedProfiles.length > 0) {
+          applyProfile(loadedProfiles[0]);
+        } else {
+          // Fallback to legacy last config
+          try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+              const data = JSON.parse(saved);
+              setHost(data.host || '');
+              setSshPort(data.sshPort || 22);
+              setSshUsername(data.sshUsername || '');
+              setEnableSsh(data.enableSsh ?? true);
+              setFtpPort(data.ftpPort || 21);
+              setFtpUsername(data.ftpUsername || '');
+              setFtpPassive(data.ftpPassive ?? true);
+              setFtpCharset(data.ftpCharset || 'Shift-JIS');
+              setEnableFtp(data.enableFtp ?? true);
+              setEnableLogging(data.enableLogging ?? true);
+              setLogTimestamp(data.logTimestamp ?? true);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load profiles:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, applyProfile]);
+
   if (!isOpen) return null;
+
+  const handleSelectProfile = (id: string) => {
+    if (!id) {
+      // Switch to blank / custom profile
+      setSelectedProfileId('');
+      setProfileName('');
+      return;
+    }
+
+    const matched = profiles.find((p) => p.id === id);
+    if (matched) {
+      applyProfile(matched);
+    }
+  };
+
+  const handleSaveProfileClick = async (asNew: boolean = false) => {
+    if (!host.trim()) {
+      setProfileNotice({ type: 'error', text: 'ホスト名を入力してください' });
+      return;
+    }
+
+    const finalName = profileName.trim() || host.trim() || '新規サーバー';
+    setIsSavingProfile(true);
+    setProfileNotice(null);
+
+    const payload: Partial<ConnectionProfile> = {
+      id: asNew ? undefined : selectedProfileId || undefined,
+      name: asNew && selectedProfileId ? `${finalName} (コピー)` : finalName,
+      host: host.trim(),
+      sshPort: Number(sshPort),
+      sshUsername: sshUsername.trim(),
+      sshAuthType,
+      sshPassword: savePassword ? sshPassword : '',
+      sshPrivateKey: sshAuthType === 'key' ? sshPrivateKey : '',
+      sshPassphrase: sshAuthType === 'key' ? sshPassphrase : '',
+      ftpPort: Number(ftpPort),
+      ftpUsername: ftpUsername.trim(),
+      ftpPassword: savePassword ? ftpPassword : '',
+      ftpPassive,
+      ftpCharset,
+      enableSsh,
+      enableFtp,
+      enableLogging,
+      logTimestamp,
+      savePassword,
+    };
+
+    try {
+      const saved = await saveProfile(payload);
+      const updatedList = await listProfiles();
+      setProfiles(updatedList);
+      setSelectedProfileId(saved.id);
+      setProfileName(saved.name);
+      localStorage.setItem(LAST_PROFILE_KEY, saved.id);
+
+      setProfileNotice({ 
+        type: 'success', 
+        text: `プロファイル「${saved.name}」を profiles.json に保存しました` 
+      });
+      setTimeout(() => setProfileNotice(null), 3500);
+    } catch (err: any) {
+      setProfileNotice({ type: 'error', text: err.message || 'プロファイルの保存に失敗しました' });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleDeleteProfileClick = async () => {
+    if (!selectedProfileId) return;
+    const current = profiles.find((p) => p.id === selectedProfileId);
+    const targetName = current?.name || 'このプロファイル';
+
+    if (!window.confirm(`プロファイル「${targetName}」を削除しますか？`)) {
+      return;
+    }
+
+    setIsSavingProfile(true);
+    setProfileNotice(null);
+
+    try {
+      await deleteProfile(selectedProfileId);
+      const updatedList = await listProfiles();
+      setProfiles(updatedList);
+      setSelectedProfileId('');
+      setProfileName('');
+      localStorage.removeItem(LAST_PROFILE_KEY);
+
+      setProfileNotice({ type: 'success', text: `プロファイル「${targetName}」を削除しました` });
+      setTimeout(() => setProfileNotice(null), 3500);
+    } catch (err: any) {
+      setProfileNotice({ type: 'error', text: err.message || 'プロファイルの削除に失敗しました' });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   const handleSshUserChange = (val: string) => {
     setSshUsername(val);
@@ -137,7 +302,13 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
 
     try {
       await onConnect(payload);
-      // Save settings (excluding sensitive keys/passwords)
+
+      // Save last selected profile ID
+      if (selectedProfileId) {
+        localStorage.setItem(LAST_PROFILE_KEY, selectedProfileId);
+      }
+
+      // Save settings fallback
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         host: payload.host,
         sshPort: payload.sshPort,
@@ -161,9 +332,9 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
-        <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/80">
+        <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
           <div className="flex items-center space-x-2">
             <Server className="w-4 h-4 text-sky-400" />
             <h2 className="text-sm font-semibold text-slate-100">サーバー接続設定</h2>
@@ -174,6 +345,88 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Profile Manager Bar */}
+        <div className="bg-slate-950/90 px-5 py-2.5 border-b border-slate-800/80 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            {/* Left: Dropdown selector */}
+            <div className="flex items-center space-x-2 flex-1 min-w-[220px]">
+              <Bookmark className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-slate-400 shrink-0 font-medium text-xs">接続プロファイル:</span>
+              <select
+                value={selectedProfileId}
+                onChange={(e) => handleSelectProfile(e.target.value)}
+                className="bg-slate-900 border border-slate-700 text-slate-100 rounded-md px-2 py-1 focus:outline-hidden focus:border-sky-500 font-medium flex-1 text-xs"
+              >
+                <option value="">＋ 新規設定（未選択）</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.host})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Right: Profile Actions */}
+            <div className="flex items-center space-x-1.5 shrink-0">
+              <input
+                type="text"
+                placeholder="プロファイル名 (例: 社内Web-01)"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                className="bg-slate-900 border border-slate-700 text-slate-100 rounded-md px-2 py-1 focus:outline-hidden focus:border-sky-500 w-40 text-xs font-medium"
+              />
+
+              <button
+                type="button"
+                onClick={() => handleSaveProfileClick(false)}
+                disabled={isSavingProfile}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors text-xs shadow-xs disabled:opacity-50"
+                title="現在の設定をプロファイルとして保存 (profiles.json)"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{selectedProfileId ? '上書き' : '保存'}</span>
+              </button>
+
+              {selectedProfileId && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveProfileClick(true)}
+                    disabled={isSavingProfile}
+                    className="flex items-center space-x-1 px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-colors text-xs border border-slate-700 disabled:opacity-50"
+                    title="別の新規プロファイルとして保存"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>別名保存</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDeleteProfileClick}
+                    disabled={isSavingProfile}
+                    className="p-1 rounded-md bg-red-950/60 hover:bg-red-900/80 text-red-400 hover:text-red-200 transition-colors text-xs border border-red-800/50 disabled:opacity-50"
+                    title="このプロファイルを削除"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Profile Notice message */}
+          {profileNotice && (
+            <div className={`text-[11px] px-2.5 py-1 rounded flex items-center space-x-1.5 ${
+              profileNotice.type === 'success' 
+                ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/40' 
+                : 'bg-red-950/60 text-red-300 border border-red-800/40'
+            }`}>
+              {profileNotice.type === 'success' && <Check className="w-3 h-3 text-emerald-400" />}
+              <span>{profileNotice.text}</span>
+            </div>
+          )}
         </div>
 
         {/* Form Body */}
@@ -469,6 +722,25 @@ export const ConnectModal: React.FC<ConnectModalProps> = ({
                 </label>
               </div>
             )}
+          </div>
+
+          {/* Password Persistence Preference */}
+          <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-800/60 flex items-center justify-between">
+            <div className="space-y-0.5">
+              <label htmlFor="savePassword" className="text-slate-200 font-medium cursor-pointer block">
+                パスワードもプロファイルに保存する（次回入力不要）
+              </label>
+              <p className="text-[10px] text-slate-500">
+                ※ 有効にすると profiles.json に平文保存されます。共有端末ではチェックを外してください。
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="savePassword"
+              checked={savePassword}
+              onChange={(e) => setSavePassword(e.target.checked)}
+              className="rounded accent-sky-500 w-4 h-4"
+            />
           </div>
 
           {/* Footer Actions */}

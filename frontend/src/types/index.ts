@@ -110,3 +110,27 @@ export interface LogInfo {
   modTime: string;
 }
 
+export interface ConnectionProfile {
+  id: string;
+  name: string;
+  host: string;
+  sshPort: number;
+  sshUsername: string;
+  sshAuthType: 'password' | 'key';
+  sshPassword?: string;
+  sshPrivateKey?: string;
+  sshPassphrase?: string;
+  ftpPort: number;
+  ftpUsername: string;
+  ftpPassword?: string;
+  ftpPassive: boolean;
+  ftpCharset: 'UTF-8' | 'Shift-JIS' | 'EUC-JP';
+  enableSsh: boolean;
+  enableFtp: boolean;
+  enableLogging: boolean;
+  logTimestamp: boolean;
+  savePassword?: boolean;
+  updatedAt?: string;
+}
+
+

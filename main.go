@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"portable-ssh-ftp/internal/api"
+	"portable-ssh-ftp/internal/config"
 	"portable-ssh-ftp/internal/session"
 	"portable-ssh-ftp/internal/terminal"
 	"portable-ssh-ftp/internal/web"
@@ -32,7 +33,8 @@ func main() {
 	}
 
 	sessionMgr := session.NewManager()
-	apiHandler := api.NewAPI(sessionMgr)
+	profileStore := config.NewProfileStore("")
+	apiHandler := api.NewAPI(sessionMgr, profileStore)
 	termHandler := terminal.NewHandler(sessionMgr)
 
 	staticFS, err := getStaticFS()

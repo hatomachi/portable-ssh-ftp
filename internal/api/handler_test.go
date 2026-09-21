@@ -1,18 +1,21 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"portable-ssh-ftp/internal/config"
 	"portable-ssh-ftp/internal/session"
 )
 
 func TestAPI_DuplicateSession_NotFound(t *testing.T) {
 	mgr := session.NewManager()
-	api := NewAPI(mgr)
+	api := NewAPI(mgr, nil)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
@@ -37,7 +40,7 @@ func TestAPI_DuplicateSession_NotFound(t *testing.T) {
 
 func TestAPI_ListSessions_Empty(t *testing.T) {
 	mgr := session.NewManager()
-	api := NewAPI(mgr)
+	api := NewAPI(mgr, nil)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
@@ -58,5 +61,105 @@ func TestAPI_ListSessions_Empty(t *testing.T) {
 	}
 	if len(resp.Sessions) != 0 {
 		t.Errorf("expected 0 sessions, got %d", len(resp.Sessions))
+	}
+}
+
+func TestAPI_Profiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := config.NewProfileStore(filepath.Join(tmpDir, "profiles.json"))
+	mgr := session.NewManager()
+	api := NewAPI(mgr, store)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	// 1. Initial list should be empty
+	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var listResp struct {
+		Profiles []config.Profile `json:"profiles"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(listResp.Profiles) != 0 {
+		t.Fatalf("expected 0 profiles, got %d", len(listResp.Profiles))
+	}
+
+	// 2. Save a profile
+	saveBody := config.Profile{
+		Name:         "Production Web 01",
+		Host:         "192.168.1.10",
+		SSHPort:      22,
+		SSHUsername:  "admin",
+		FTPPort:      21,
+		FTPUsername:  "ftpadmin",
+		FTPCharset:   "Shift-JIS",
+		EnableSSH:    true,
+		EnableFTP:    true,
+		SavePassword: false,
+		SSHPassword:  "secret-to-be-cleared",
+	}
+	bodyBytes, _ := json.Marshal(saveBody)
+	req = httptest.NewRequest(http.MethodPost, "/api/profiles", bytes.NewReader(bodyBytes))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var saveResp struct {
+		Profile config.Profile `json:"profile"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&saveResp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if saveResp.Profile.ID == "" {
+		t.Fatal("expected generated profile ID")
+	}
+	if saveResp.Profile.Name != "Production Web 01" {
+		t.Errorf("expected name 'Production Web 01', got %s", saveResp.Profile.Name)
+	}
+	if saveResp.Profile.SSHPassword != "" {
+		t.Errorf("expected password to be cleared when SavePassword is false, got %s", saveResp.Profile.SSHPassword)
+	}
+
+	profileID := saveResp.Profile.ID
+
+	// 3. List should have 1 profile
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	listResp = struct {
+		Profiles []config.Profile `json:"profiles"`
+	}{}
+	_ = json.NewDecoder(w.Body).Decode(&listResp)
+	if len(listResp.Profiles) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(listResp.Profiles))
+	}
+
+	// 4. Delete profile
+	req = httptest.NewRequest(http.MethodDelete, "/api/profiles/"+profileID, nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on delete, got %d", w.Code)
+	}
+
+	// 5. List should be empty again
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	listResp = struct {
+		Profiles []config.Profile `json:"profiles"`
+	}{}
+	_ = json.NewDecoder(w.Body).Decode(&listResp)
+	if len(listResp.Profiles) != 0 {
+		t.Fatalf("expected 0 profiles after delete, got %d", len(listResp.Profiles))
 	}
 }
