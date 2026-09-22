@@ -211,6 +211,60 @@ func (m *Manager) DuplicateSession(id string) (*Session, error) {
 	return m.CreateSession(req)
 }
 
+func (m *Manager) ReconnectSession(id string) (*Session, error) {
+	m.mu.RLock()
+	if id == "" || id == "active" {
+		id = m.activeID
+	}
+
+	sess, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("session not found: %s", id)
+	}
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	var lastErr error
+
+	if sess.Req.EnableSSH {
+		if sess.SSHClient != nil {
+			_ = sess.SSHClient.Close()
+			sess.SSHClient = nil
+		}
+		newSSH, err := ssh.NewClient(sess.SSHConfig)
+		if err != nil {
+			lastErr = fmt.Errorf("ssh reconnection failed: %w", err)
+		} else {
+			sess.SSHClient = newSSH
+		}
+	}
+
+	if sess.Req.EnableFTP {
+		if sess.FTPClient != nil {
+			_ = sess.FTPClient.Close()
+			sess.FTPClient = nil
+		}
+		newFTP, err := ftp.NewClient(sess.FTPConfig)
+		if err != nil {
+			if lastErr != nil {
+				lastErr = fmt.Errorf("%v; ftp reconnection failed: %w", lastErr, err)
+			} else {
+				lastErr = fmt.Errorf("ftp reconnection failed: %w", err)
+			}
+		} else {
+			sess.FTPClient = newFTP
+		}
+	}
+
+	if lastErr != nil {
+		return sess, lastErr
+	}
+
+	return sess, nil
+}
+
 type SessionSummary struct {
 	ID           string `json:"id"`
 	Host         string `json:"host"`

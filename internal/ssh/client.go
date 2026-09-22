@@ -24,6 +24,8 @@ type Client struct {
 	sshClient  *ssh.Client
 	sftpClient *sftp.Client
 	sftpMu     sync.Mutex
+	stopCh     chan struct{}
+	closeOnce  sync.Once
 }
 
 func NewClient(cfg Config) (*Client, error) {
@@ -68,13 +70,63 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to connect to ssh server %s: %w", addr, err)
 	}
 
-	return &Client{
+	client := &Client{
 		cfg:       cfg,
 		sshClient: sshClient,
-	}, nil
+		stopCh:    make(chan struct{}),
+	}
+	client.startKeepAlive(15 * time.Second)
+
+	return client, nil
+}
+
+func (c *Client) startKeepAlive(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case <-ticker.C:
+				resCh := make(chan error, 1)
+				go func() {
+					if c.sshClient == nil {
+						resCh <- fmt.Errorf("client closed")
+						return
+					}
+					// OpenSSH keepalive request. If server doesn't support the request name,
+					// it responds with failure (err == nil, ok == false), which still proves the connection is alive!
+					_, _, err := c.sshClient.SendRequest("keepalive@openssh.com", true, nil)
+					resCh <- err
+				}()
+
+				select {
+				case <-c.stopCh:
+					return
+				case err := <-resCh:
+					if err != nil {
+						// Network connection dropped or reset
+						_ = c.Close()
+						return
+					}
+				case <-time.After(10 * time.Second):
+					// Keepalive response timed out
+					_ = c.Close()
+					return
+				}
+			}
+		}
+	}()
 }
 
 func (c *Client) Close() error {
+	c.closeOnce.Do(func() {
+		if c.stopCh != nil {
+			close(c.stopCh)
+		}
+	})
+
 	c.sftpMu.Lock()
 	if c.sftpClient != nil {
 		_ = c.sftpClient.Close()

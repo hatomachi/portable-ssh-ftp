@@ -140,6 +140,27 @@ export async function viewSshFile(sessionId: string, path: string, maxBytes: num
   return data;
 }
 
+export function getSshDownloadUrl(sessionId: string, path: string): string {
+  return `${API_BASE}/ssh/download?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+}
+
+export async function uploadSshFile(sessionId: string, targetDir: string, file: File): Promise<{ status: string; path: string; name: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('dir', targetDir);
+
+  const res = await fetch(`${API_BASE}/ssh/upload?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to upload file via SSH');
+  }
+  return data;
+}
+
 export async function duplicateSession(sessionId: string): Promise<ConnectResponse> {
   const res = await fetch(`${API_BASE}/session/${encodeURIComponent(sessionId)}/duplicate`, {
     method: 'POST',
@@ -147,6 +168,17 @@ export async function duplicateSession(sessionId: string): Promise<ConnectRespon
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.error || 'Failed to duplicate session');
+  }
+  return data;
+}
+
+export async function reconnectSession(sessionId: string): Promise<ConnectResponse> {
+  const res = await fetch(`${API_BASE}/session/${encodeURIComponent(sessionId)}/reconnect`, {
+    method: 'POST',
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to reconnect session');
   }
   return data;
 }

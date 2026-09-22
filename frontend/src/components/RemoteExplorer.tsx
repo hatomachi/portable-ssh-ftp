@@ -29,7 +29,9 @@ import {
   deleteFtpItem, 
   createFtpDir, 
   fetchSshFiles, 
-  viewSshFile 
+  viewSshFile,
+  uploadSshFile,
+  getSshDownloadUrl
 } from '../api/client';
 import { FilePreviewModal } from './FilePreviewModal';
 
@@ -69,10 +71,12 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
 
-  // FTP directory creation & drag drop
+  // Upload & Drag drop
   const [newDirName, setNewDirName] = useState('');
   const [isCreatingDir, setIsCreatingDir] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+  const [uploadingStatus, setUploadingStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Copy path feedback
@@ -110,11 +114,15 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
       if (protocolMode === 'ssh') {
         const data = await fetchSshFiles(sessionId, targetPath);
         setEntries(data.entries || []);
-        setSshPath(data.path || targetPath);
+        const resolved = data.path || targetPath;
+        setSshPath(resolved);
+        window.dispatchEvent(new CustomEvent('explorer:path', { detail: { sessionId, path: resolved } }));
       } else {
         const data = await listFtpFiles(sessionId, targetPath);
         setEntries(data.entries || []);
-        setFtpPath(data.path || targetPath);
+        const resolved = data.path || targetPath;
+        setFtpPath(resolved);
+        window.dispatchEvent(new CustomEvent('explorer:path', { detail: { sessionId, path: resolved } }));
       }
     } catch (err: any) {
       setError(err.message || 'ファイル一覧の取得に失敗しました');
@@ -138,6 +146,33 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
       }
     }
   }, [sessionId, mode]);
+
+  // Listen for session reconnected or external refresh (e.g. terminal drop)
+  useEffect(() => {
+    const handleReconnected = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sessionId: string }>;
+      if (customEvent.detail?.sessionId === sessionId) {
+        if (mode === 'ssh') {
+          fetchFiles(sshPath, 'ssh');
+        } else if (mode === 'ftp') {
+          fetchFiles(ftpPath, 'ftp');
+        }
+      }
+    };
+    const handleRefresh = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sessionId?: string }>;
+      if (!customEvent.detail?.sessionId || customEvent.detail.sessionId === sessionId) {
+        fetchFiles(currentPath, mode);
+      }
+    };
+
+    window.addEventListener('session:reconnected', handleReconnected);
+    window.addEventListener('explorer:refresh', handleRefresh);
+    return () => {
+      window.removeEventListener('session:reconnected', handleReconnected);
+      window.removeEventListener('explorer:refresh', handleRefresh);
+    };
+  }, [sessionId, mode, sshPath, ftpPath, currentPath]);
 
   // Navigate
   const handleNavigate = (path: string) => {
@@ -243,20 +278,30 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
     sendToTerminal(`cd "${targetDir}"\r`);
   };
 
-  // FTP Upload
-  const handleFileUpload = async (files: FileList | null) => {
-    if (!files || files.length === 0 || mode !== 'ftp') return;
+  // File Upload (SSH & FTP)
+  const handleFileUpload = async (files: FileList | null, destinationDir?: string) => {
+    if (!files || files.length === 0) return;
+    const targetDir = destinationDir || currentPath || '.';
     setIsLoading(true);
     setError(null);
+    setUploadingStatus(`${files.length} 個のファイルをアップロード中...`);
     try {
       for (let i = 0; i < files.length; i++) {
-        await uploadFtpFile(sessionId, currentPath, files[i]);
+        const file = files[i];
+        setUploadingStatus(`アップロード中 (${i + 1}/${files.length}): ${file.name}`);
+        if (mode === 'ssh') {
+          await uploadSshFile(sessionId, targetDir, file);
+        } else {
+          await uploadFtpFile(sessionId, targetDir, file);
+        }
       }
       await fetchFiles(currentPath);
     } catch (err: any) {
       setError(err.message || 'アップロードに失敗しました');
     } finally {
       setIsLoading(false);
+      setUploadingStatus(null);
+      setDragOverFolder(null);
     }
   };
 
@@ -333,25 +378,41 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
     <div 
       className="flex flex-col h-full w-full bg-slate-950 border-r border-slate-800 relative select-none"
       onDragOver={(e) => { 
-        if (mode === 'ftp') {
-          e.preventDefault(); 
-          setIsDragging(true); 
+        e.preventDefault(); 
+        setIsDragging(true); 
+      }}
+      onDragLeave={(e) => {
+        // Only set isDragging false if leaving the container
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setIsDragging(false);
+          setDragOverFolder(null);
         }
       }}
-      onDragLeave={() => setIsDragging(false)}
       onDrop={(e) => {
-        if (mode === 'ftp') {
-          e.preventDefault();
-          setIsDragging(false);
-          handleFileUpload(e.dataTransfer.files);
-        }
+        e.preventDefault();
+        setIsDragging(false);
+        setDragOverFolder(null);
+        handleFileUpload(e.dataTransfer.files, currentPath);
       }}
     >
-      {/* Drag & drop overlay for FTP */}
-      {isDragging && mode === 'ftp' && (
-        <div className="absolute inset-0 z-30 bg-sky-950/80 border-2 border-dashed border-sky-400 flex flex-col items-center justify-center pointer-events-none backdrop-blur-xs">
+      {/* Drag & drop overlay (SSH & FTP) */}
+      {isDragging && !dragOverFolder && (
+        <div className="absolute inset-0 z-30 bg-sky-950/85 border-2 border-dashed border-sky-400 flex flex-col items-center justify-center pointer-events-none backdrop-blur-xs">
           <Upload className="w-12 h-12 text-sky-400 animate-bounce mb-2" />
-          <span className="text-sm font-semibold text-sky-200">ここにファイルをドロップしてアップロード</span>
+          <span className="text-sm font-semibold text-sky-200">
+            ここにドロップして {mode === 'ssh' ? 'SCP/SFTP' : 'FTP'} アップロード
+          </span>
+          <span className="text-xs text-sky-300/80 font-mono mt-1">
+            宛先: {currentPath || '/'}
+          </span>
+        </div>
+      )}
+
+      {/* Uploading progress notification banner */}
+      {uploadingStatus && (
+        <div className="absolute top-2 left-3 right-3 z-40 bg-sky-950/90 border border-sky-600 rounded-lg px-3 py-2 text-xs text-sky-200 flex items-center space-x-2 shadow-lg animate-pulse">
+          <RefreshCw className="w-4 h-4 animate-spin text-sky-400 shrink-0" />
+          <span className="font-mono flex-1 truncate">{uploadingStatus}</span>
         </div>
       )}
 
@@ -456,33 +517,33 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
             </button>
           )}
 
-          {/* FTP specific: Create folder & upload */}
+          {/* FTP specific: Create folder */}
           {mode === 'ftp' && (
-            <>
-              <button
-                onClick={() => setIsCreatingDir(true)}
-                title="新規フォルダ作成"
-                className="p-1.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-              >
-                <FolderPlus className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                title="ファイルをアップロード"
-                className="p-1.5 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors"
-              >
-                <Upload className="w-4 h-4" />
-              </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={(e) => handleFileUpload(e.target.files)}
-                className="hidden"
-                multiple
-              />
-            </>
+            <button
+              onClick={() => setIsCreatingDir(true)}
+              title="新規フォルダ作成"
+              className="p-1.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            >
+              <FolderPlus className="w-4 h-4" />
+            </button>
           )}
+
+          {/* Upload button (SSH & FTP) */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            title={mode === 'ssh' ? "ローカルファイルをSCP/SFTPアップロード" : "ローカルファイルをFTPアップロード"}
+            className="p-1.5 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors flex items-center space-x-1"
+          >
+            <Upload className="w-4 h-4" />
+            <span className="hidden sm:inline text-[10px] text-sky-400 font-medium">Upload</span>
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={(e) => handleFileUpload(e.target.files, currentPath)}
+            className="hidden"
+            multiple
+          />
 
           {/* Refresh button */}
           <button
@@ -592,16 +653,45 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
 
             {sortedEntries.map((item) => {
               const isItemCopied = copiedPath === item.path;
+              const isFolderDropTarget = dragOverFolder === item.path;
 
               return (
                 <tr
                   key={item.path}
                   onDoubleClick={() => handleItemDoubleClick(item)}
-                  className="hover:bg-slate-900/60 transition-colors group cursor-pointer"
+                  onDragOver={(e) => {
+                    if (item.isDir) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOverFolder(item.path);
+                    }
+                  }}
+                  onDragLeave={(e) => {
+                    if (item.isDir) {
+                      e.stopPropagation();
+                      if (dragOverFolder === item.path) {
+                        setDragOverFolder(null);
+                      }
+                    }
+                  }}
+                  onDrop={(e) => {
+                    if (item.isDir) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOverFolder(null);
+                      setIsDragging(false);
+                      handleFileUpload(e.dataTransfer.files, item.path);
+                    }
+                  }}
+                  className={`transition-colors group cursor-pointer ${
+                    isFolderDropTarget 
+                      ? 'bg-sky-900/80 ring-2 ring-sky-400 text-sky-200 font-semibold' 
+                      : 'hover:bg-slate-900/60'
+                  }`}
                 >
                   <td className="py-1.5 px-3 flex items-center space-x-2 truncate">
                     {item.isDir ? (
-                      <Folder className="w-4 h-4 text-sky-400 shrink-0" />
+                      <Folder className={`w-4 h-4 shrink-0 ${isFolderDropTarget ? 'text-sky-300 animate-pulse' : 'text-sky-400'}`} />
                     ) : (
                       <File className="w-4 h-4 text-slate-400 shrink-0" />
                     )}
@@ -666,12 +756,12 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                         </button>
                       )}
 
-                      {/* Download for FTP */}
-                      {mode === 'ftp' && !item.isDir && (
+                      {/* Download (SSH & FTP) */}
+                      {!item.isDir && (
                         <a
-                          href={getDownloadUrl(sessionId, item.path)}
+                          href={mode === 'ssh' ? getSshDownloadUrl(sessionId, item.path) : getDownloadUrl(sessionId, item.path)}
                           download={item.name}
-                          title="ダウンロード"
+                          title={mode === 'ssh' ? "ローカルへダウンロード (SCP/SFTP)" : "ローカルへダウンロード (FTP)"}
                           className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800"
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -716,6 +806,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
         isLoading={previewLoading}
         error={previewError}
         onSendToTerminal={sendToTerminal}
+        downloadUrl={previewData?.path ? (mode === 'ssh' ? getSshDownloadUrl(sessionId, previewData.path) : getDownloadUrl(sessionId, previewData.path)) : undefined}
       />
     </div>
   );

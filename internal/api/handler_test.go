@@ -163,3 +163,38 @@ func TestAPI_Profiles(t *testing.T) {
 		t.Fatalf("expected 0 profiles after delete, got %d", len(listResp.Profiles))
 	}
 }
+
+func TestAPI_SSHUpload_Validation(t *testing.T) {
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	// POST /api/ssh/upload with no session -> 400
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh/upload", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 status for missing session, got %d", w.Code)
+	}
+}
+
+func TestAPI_SSHDownload_Validation(t *testing.T) {
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	// GET /api/ssh/download with no session -> 400
+	req := httptest.NewRequest(http.MethodGet, "/api/ssh/download?path=/test.txt", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 status for missing session, got %d", w.Code)
+	}
+}
+

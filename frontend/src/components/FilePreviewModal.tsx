@@ -6,7 +6,8 @@ import {
   FileText, 
   AlertTriangle, 
   Terminal as TerminalIcon, 
-  WrapText 
+  WrapText,
+  Download
 } from 'lucide-react';
 import type { FilePreviewResponse } from '../types';
 
@@ -17,6 +18,7 @@ interface FilePreviewModalProps {
   isLoading: boolean;
   error: string | null;
   onSendToTerminal?: (cmd: string) => void;
+  downloadUrl?: string;
 }
 
 export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
@@ -26,6 +28,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   isLoading,
   error,
   onSendToTerminal,
+  downloadUrl,
 }) => {
   const [copied, setCopied] = useState(false);
   const [wordWrap, setWordWrap] = useState(true);
@@ -127,6 +130,18 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                 </>
               )}
             </button>
+
+            {downloadUrl && previewData && (
+              <a
+                href={downloadUrl}
+                download={previewData.name}
+                title="ローカルにダウンロード"
+                className="px-2.5 py-1.5 rounded text-xs bg-sky-950/70 hover:bg-sky-900/80 text-sky-300 border border-sky-800/60 transition-colors flex items-center space-x-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-medium">ダウンロード</span>
+              </a>
+            )}
 
             {onSendToTerminal && previewData?.path && (
               <div className="hidden sm:flex items-center space-x-1 pl-1 border-l border-slate-800">

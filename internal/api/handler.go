@@ -43,10 +43,16 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/ssh/files", a.handleSSHFiles)
 	mux.HandleFunc("/api/ssh/file/view", a.handleSSHFileView)
+	mux.HandleFunc("/api/ssh/upload", a.handleSSHUpload)
+	mux.HandleFunc("/api/ssh/download", a.handleSSHDownload)
 	mux.HandleFunc("GET /api/session/{id}/ssh/files", a.handleSessionSSHFiles)
 	mux.HandleFunc("GET /api/session/{id}/ssh/file/view", a.handleSessionSSHFileView)
+	mux.HandleFunc("POST /api/session/{id}/ssh/upload", a.handleSessionSSHUpload)
+	mux.HandleFunc("GET /api/session/{id}/ssh/download", a.handleSessionSSHDownload)
 	mux.HandleFunc("POST /api/session/{id}/duplicate", a.handleDuplicateSession)
 	mux.HandleFunc("POST /api/session/duplicate", a.handleDuplicateSession)
+	mux.HandleFunc("POST /api/session/{id}/reconnect", a.handleReconnectSession)
+	mux.HandleFunc("POST /api/session/reconnect", a.handleReconnectSession)
 	mux.HandleFunc("GET /api/sessions", a.handleSessions)
 
 	mux.HandleFunc("GET /api/logs", a.handleListLogs)
@@ -432,6 +438,97 @@ func (a *API) handleSessionSSHFileView(w http.ResponseWriter, r *http.Request) {
 	a.handleSSHFileView(w, r)
 }
 
+func (a *API) handleSSHUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		sessionID = r.FormValue("sessionId")
+	}
+	sess, err := a.getSSHClient(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 64MB max in memory before temporary file
+	if err := r.ParseMultipartForm(64 << 20); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Failed to parse multipart form: "+err.Error())
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, "No file provided: "+err.Error())
+		return
+	}
+	defer file.Close()
+
+	targetDir := r.FormValue("dir")
+	if targetDir == "" {
+		targetDir = "."
+	}
+
+	uploadedPath, err := sess.SSHClient.UploadFile(targetDir, header.Filename, file, header.Size, 0644)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Upload failed: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status": "uploaded",
+		"path":   uploadedPath,
+		"name":   header.Filename,
+	})
+}
+
+func (a *API) handleSessionSSHUpload(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("sessionId", r.PathValue("id"))
+	r.URL.RawQuery = q.Encode()
+	a.handleSSHUpload(w, r)
+}
+
+func (a *API) handleSSHDownload(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("sessionId")
+	sess, err := a.getSSHClient(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		errorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	filename, size, _ := sess.SSHClient.StatFile(remotePath)
+	if filename == "" || filename == "." || filename == "/" {
+		filename = path.Base(remotePath)
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(filename)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+
+	if err := sess.SSHClient.DownloadFile(remotePath, w); err != nil {
+		return
+	}
+}
+
+func (a *API) handleSessionSSHDownload(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("sessionId", r.PathValue("id"))
+	r.URL.RawQuery = q.Encode()
+	a.handleSSHDownload(w, r)
+}
+
 func (a *API) handleDuplicateSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -455,6 +552,45 @@ func (a *API) handleDuplicateSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := a.mgr.DuplicateSession(sessionID)
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, "Failed to duplicate session: "+err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"sessionId":    sess.ID,
+		"sshConnected": sess.SSHClient != nil,
+		"ftpConnected": sess.FTPClient != nil,
+		"host":         sess.Req.Host,
+		"sshPort":      sess.SSHConfig.Port,
+		"sshUsername":  sess.SSHConfig.Username,
+		"ftpPort":      sess.FTPConfig.Port,
+		"ftpUsername":  sess.FTPConfig.Username,
+		"ftpCharset":   sess.FTPConfig.Charset,
+		"logFilePath":  sess.LogFilePath,
+	})
+}
+
+func (a *API) handleReconnectSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		sessionID = r.URL.Query().Get("sessionId")
+	}
+	if sessionID == "" {
+		var body struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.SessionID != "" {
+			sessionID = body.SessionID
+		}
+	}
+
+	sess, err := a.mgr.ReconnectSession(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, "Failed to reconnect session: "+err.Error())
 		return
 	}
 

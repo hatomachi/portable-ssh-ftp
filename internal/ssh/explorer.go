@@ -380,3 +380,180 @@ func parseLsTime(s string, now time.Time) time.Time {
 func quoteShellArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
+
+// StatFile retrieves the file name and size of a remote file.
+func (c *Client) StatFile(remotePath string) (string, int64, error) {
+	filename := path.Base(remotePath)
+
+	// Try SFTP first
+	sftpClient, err := c.GetSFTPClient()
+	if err == nil {
+		fi, sftpErr := sftpClient.Stat(remotePath)
+		if sftpErr == nil {
+			return filename, fi.Size(), nil
+		}
+		c.ResetSFTPClient()
+	}
+
+	// Fallback to SSH exec
+	session, err := c.NewSession()
+	if err != nil {
+		return filename, -1, fmt.Errorf("failed to create ssh session: %w", err)
+	}
+	defer session.Close()
+
+	script := fmt.Sprintf(`sh -c 'f=%s
+if [ ! -e "$f" ]; then
+  echo "NOT_FOUND" >&2
+  exit 1
+fi
+wc -c < "$f" 2>/dev/null || echo "-1"
+'`, quoteShellArg(remotePath))
+
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+
+	if err := session.Run(script); err != nil {
+		return filename, -1, fmt.Errorf("failed to stat file: %s", strings.TrimSpace(stderr.String()))
+	}
+
+	sizeStr := strings.TrimSpace(stdout.String())
+	size, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil {
+		size = -1
+	}
+
+	return filename, size, nil
+}
+
+// UploadFile uploads a file to remote targetDir with filename.
+// If targetDir is empty, uploads to current/home directory.
+// Returns the uploaded full remote path.
+func (c *Client) UploadFile(targetDir string, filename string, r io.Reader, size int64, mode os.FileMode) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename cannot be empty")
+	}
+
+	// Try SFTP first
+	sftpClient, err := c.GetSFTPClient()
+	if err == nil {
+		destDir := targetDir
+		if destDir == "" || destDir == "." || destDir == "~" {
+			if real, err := sftpClient.RealPath("."); err == nil {
+				destDir = real
+			} else {
+				destDir = "/"
+			}
+		}
+
+		remotePath := path.Join(destDir, filename)
+		if strings.HasPrefix(destDir, "/") && !strings.HasPrefix(remotePath, "/") {
+			remotePath = "/" + remotePath
+		}
+
+		remoteFile, sftpErr := sftpClient.Create(remotePath)
+		if sftpErr == nil {
+			defer remoteFile.Close()
+			if _, copyErr := io.Copy(remoteFile, r); copyErr != nil {
+				return "", fmt.Errorf("sftp upload copy error: %w", copyErr)
+			}
+			if mode != 0 {
+				_ = sftpClient.Chmod(remotePath, mode)
+			}
+			return remotePath, nil
+		}
+		c.ResetSFTPClient()
+	}
+
+	// Fallback to SSH exec (cat > targetPath)
+	session, err := c.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("failed to create ssh session for upload: %w", err)
+	}
+	defer session.Close()
+
+	destDir := targetDir
+	if destDir == "" || destDir == "." {
+		destDir = "."
+	}
+	remotePath := path.Join(destDir, filename)
+	if strings.HasPrefix(destDir, "/") && !strings.HasPrefix(remotePath, "/") {
+		remotePath = "/" + remotePath
+	}
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to open stdin pipe: %w", err)
+	}
+
+	var stderr bytes.Buffer
+	session.Stderr = &stderr
+
+	script := fmt.Sprintf("cat > %s", quoteShellArg(remotePath))
+	if err := session.Start(script); err != nil {
+		stdin.Close()
+		return "", fmt.Errorf("failed to start upload command: %w", err)
+	}
+
+	if _, err := io.Copy(stdin, r); err != nil {
+		stdin.Close()
+		return "", fmt.Errorf("failed writing to remote stdin: %w", err)
+	}
+	stdin.Close()
+
+	if err := session.Wait(); err != nil {
+		return "", fmt.Errorf("upload failed: %s", strings.TrimSpace(stderr.String()))
+	}
+
+	if mode != 0 {
+		if chmodSess, err := c.NewSession(); err == nil {
+			_ = chmodSess.Run(fmt.Sprintf("chmod %o %s", mode&0777, quoteShellArg(remotePath)))
+			chmodSess.Close()
+		}
+	}
+
+	return remotePath, nil
+}
+
+// DownloadFile streams the remote file content to writer w.
+func (c *Client) DownloadFile(remotePath string, w io.Writer) error {
+	if remotePath == "" {
+		return fmt.Errorf("remotePath cannot be empty")
+	}
+
+	// Try SFTP first
+	sftpClient, err := c.GetSFTPClient()
+	if err == nil {
+		remoteFile, sftpErr := sftpClient.Open(remotePath)
+		if sftpErr == nil {
+			defer remoteFile.Close()
+			_, copyErr := io.Copy(w, remoteFile)
+			return copyErr
+		}
+		c.ResetSFTPClient()
+	}
+
+	// Fallback to SSH exec (cat remotePath)
+	session, err := c.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create ssh session for download: %w", err)
+	}
+	defer session.Close()
+
+	var stderr bytes.Buffer
+	session.Stdout = w
+	session.Stderr = &stderr
+
+	script := fmt.Sprintf("cat %s", quoteShellArg(remotePath))
+	if err := session.Run(script); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		return fmt.Errorf("ssh cat failed: %s", errMsg)
+	}
+
+	return nil
+}
+

@@ -70,3 +70,11 @@ func TestManager_DuplicateSession_NotFound(t *testing.T) {
 		t.Fatalf("expected error when duplicating non-existent session, got nil")
 	}
 }
+
+func TestManager_ReconnectSession_NotFound(t *testing.T) {
+	mgr := NewManager()
+	_, err := mgr.ReconnectSession("non-existent")
+	if err == nil {
+		t.Fatalf("expected error when reconnecting non-existent session, got nil")
+	}
+}
