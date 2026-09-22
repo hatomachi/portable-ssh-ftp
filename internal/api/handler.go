@@ -1,9 +1,12 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"portable-ssh-ftp/internal/ai"
@@ -26,6 +30,8 @@ type API struct {
 	profileStore *config.ProfileStore
 	lifecycleMgr *lifecycle.Manager
 	aiSvc        *ai.Service
+	port         int
+	mcpServers   sync.Map
 }
 
 func NewAPI(mgr *session.Manager, profileStore *config.ProfileStore) *API {
@@ -45,6 +51,10 @@ func (a *API) SetAIService(svc *ai.Service) {
 
 func (a *API) SetLifecycleManager(lm *lifecycle.Manager) {
 	a.lifecycleMgr = lm
+}
+
+func (a *API) SetServerPort(port int) {
+	a.port = port
 }
 
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
@@ -96,6 +106,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	// AI Copilot (Claude CLI)
 	mux.HandleFunc("GET /api/ai/status", a.handleAIStatus)
 	mux.HandleFunc("POST /api/ai/chat", a.handleAIChat)
+	mux.HandleFunc("POST /api/mcp", a.handleMCP)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -963,6 +974,27 @@ func (a *API) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, res)
 }
 
+func (a *API) handleMCP(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	if token == "" {
+		errorResponse(w, http.StatusUnauthorized, "Token is required")
+		return
+	}
+	val, ok := a.mcpServers.Load(token)
+	if !ok {
+		errorResponse(w, http.StatusUnauthorized, "Invalid or expired MCP token")
+		return
+	}
+	server := val.(*ai.MCPServer)
+	server.ServeHTTP(w, r)
+}
+
 func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -984,14 +1016,35 @@ func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var executor ai.RemoteExecutor
+	var mcpServer *ai.MCPServer
+	var mcpURL string
 	if req.AutoInspect && req.Context.SessionID != "" && a.mgr != nil {
 		if sess, ok := a.mgr.GetSession(req.Context.SessionID); ok && sess.SSHClient != nil {
-			executor = sess.SSHClient
+			tokenBytes := make([]byte, 16)
+			_, _ = rand.Read(tokenBytes)
+			token := hex.EncodeToString(tokenBytes)
+
+			mcpServer = ai.NewMCPServer(token, sess.SSHClient, req.AllowedCommands)
+			a.mcpServers.Store(token, mcpServer)
+			defer a.mcpServers.Delete(token)
+
+			port := a.port
+			if port == 0 {
+				if _, pStr, err := net.SplitHostPort(r.Host); err == nil {
+					if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+						port = p
+					}
+				}
+			}
+			if port == 0 {
+				port = 8080
+			}
+
+			mcpURL = fmt.Sprintf("http://127.0.0.1:%d/api/mcp?token=%s", port, token)
 		}
 	}
 
-	res, err := a.aiSvc.InspectAndChat(r.Context(), req, executor)
+	res, err := a.aiSvc.InspectAndChat(r.Context(), req, mcpURL, mcpServer)
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return

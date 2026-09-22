@@ -31,10 +31,11 @@ type ChatMessage struct {
 }
 
 type ChatRequest struct {
-	Prompt      string      `json:"prompt"`
-	Context     ChatContext `json:"context"`
-	Model       string      `json:"model,omitempty"`
-	AutoInspect bool        `json:"autoInspect"`
+	Prompt          string      `json:"prompt"`
+	Context         ChatContext `json:"context"`
+	Model           string      `json:"model,omitempty"`
+	AutoInspect     bool        `json:"autoInspect"`
+	AllowedCommands []string    `json:"allowedCommands,omitempty"`
 }
 
 type CommandSnippet struct {
@@ -46,6 +47,7 @@ type CommandSnippet struct {
 // InspectLog records the safe inspection command execution result.
 type InspectLog struct {
 	Command  string `json:"command"`
+	Reason   string `json:"reason,omitempty"`
 	Output   string `json:"output"`
 	Error    string `json:"error,omitempty"`
 	Duration string `json:"duration,omitempty"`

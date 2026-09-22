@@ -37,6 +37,7 @@ func main() {
 	sessionMgr := session.NewManager()
 	profileStore := config.NewProfileStore("")
 	apiHandler := api.NewAPI(sessionMgr, profileStore)
+	apiHandler.SetServerPort(actualPort)
 	termHandler := terminal.NewHandler(sessionMgr)
 
 	// Lifecycle & Auto-Shutdown management

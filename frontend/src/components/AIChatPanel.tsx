@@ -19,6 +19,7 @@ import {
   Search,
   ChevronDown,
   ChevronRight,
+  SlidersHorizontal,
 } from 'lucide-react';
 import type { AIChatMessage, AIInspectLog, AIStatusResponse, SessionStatus } from '../types';
 import { getAIStatus, askAIChat } from '../api/client';
@@ -32,6 +33,34 @@ interface AIChatPanelProps {
 }
 
 const STORAGE_KEY_PREFIX = 'portable_ssh_ai_chat_';
+const ALLOWED_COMMANDS_KEY = 'portable_ssh_allowed_inspect_commands';
+
+const DEFAULT_ALLOWED_COMMANDS = [
+  'ls', 'cat', 'head', 'tail', 'grep', 'wc', 'stat',
+  'df', 'free', 'uptime', 'uname', 'date',
+  'ps', 'systemctl',
+  'ss', 'which', 'ip',
+];
+
+const PRESET_COMMANDS = [
+  { cmd: 'ls', desc: 'ファイル一覧', group: '基本' },
+  { cmd: 'cat', desc: 'ファイル閲覧', group: '基本' },
+  { cmd: 'head', desc: '先頭行確認', group: '基本' },
+  { cmd: 'tail', desc: '末尾行確認', group: '基本' },
+  { cmd: 'grep', desc: '文字列・ログ検索', group: '基本' },
+  { cmd: 'wc', desc: '行数・件数カウント', group: '基本' },
+  { cmd: 'stat', desc: 'ファイル属性詳細', group: '基本' },
+  { cmd: 'df', desc: 'ディスク容量', group: 'リソース' },
+  { cmd: 'free', desc: 'メモリ状況', group: 'リソース' },
+  { cmd: 'uptime', desc: '稼働時間/負荷', group: 'リソース' },
+  { cmd: 'uname', desc: 'OS/カーネル情報', group: 'リソース' },
+  { cmd: 'date', desc: '現在時刻/TZ確認', group: 'リソース' },
+  { cmd: 'ps', desc: 'プロセス一覧', group: 'プロセス' },
+  { cmd: 'systemctl', desc: 'サービス状態確認', group: 'プロセス' },
+  { cmd: 'ss', desc: 'ポート・通信確認', group: 'ネット' },
+  { cmd: 'which', desc: 'コマンド存在確認', group: 'ネット' },
+  { cmd: 'ip', desc: 'IP/NIC状態確認', group: 'ネット' },
+];
 
 const QUICK_PROMPTS = [
   { label: '📁 カレント調査', prompt: 'カレントディレクトリのファイル一覧を確認し、構成の概要と次に調べるべき推奨コマンドを教えて。' },
@@ -78,6 +107,12 @@ const InspectLogAccordion: React.FC<{ logs: AIInspectLog[] }> = ({ logs }) => {
                 {log.duration && <span className="text-slate-500 shrink-0 ml-2">{log.duration}</span>}
               </div>
 
+              {log.reason && (
+                <div className="text-[10px] text-slate-400 font-sans">
+                  目的: {log.reason}
+                </div>
+              )}
+
               {log.blocked ? (
                 <div className="flex items-start space-x-1 text-amber-300 text-[10px] bg-amber-950/50 p-1.5 rounded border border-amber-800/60">
                   <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5 text-amber-400" />
@@ -116,6 +151,43 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [sentToBarId, setSentToBarId] = useState<string | null>(null);
   const [executedId, setExecutedId] = useState<string | null>(null);
+
+  const [allowedCommands, setAllowedCommands] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(ALLOWED_COMMANDS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_ALLOWED_COMMANDS;
+  });
+  const [showCommandSettings, setShowCommandSettings] = useState(false);
+  const [customCommandInput, setCustomCommandInput] = useState('');
+
+  const saveAllowedCommands = (cmds: string[]) => {
+    setAllowedCommands(cmds);
+    try {
+      localStorage.setItem(ALLOWED_COMMANDS_KEY, JSON.stringify(cmds));
+    } catch {}
+  };
+
+  const toggleCommand = (cmd: string) => {
+    if (allowedCommands.includes(cmd)) {
+      saveAllowedCommands(allowedCommands.filter((c) => c !== cmd));
+    } else {
+      saveAllowedCommands([...allowedCommands, cmd]);
+    }
+  };
+
+  const handleAddCustomCommand = () => {
+    const trimmed = customCommandInput.trim().toLowerCase();
+    if (!trimmed) return;
+    const parts = trimmed.split(/[\s,]+/).filter(Boolean);
+    const newSet = new Set([...allowedCommands, ...parts]);
+    saveAllowedCommands(Array.from(newSet));
+    setCustomCommandInput('');
+  };
 
   const isSshAvailable = Boolean(sessionStatus?.sshConnected);
 
@@ -259,6 +331,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         prompt: promptToSend,
         context: aiContext,
         autoInspect: autoInspect && isSshAvailable,
+        allowedCommands: autoInspect ? allowedCommands : undefined,
       });
 
       const assistantMessage: AIChatMessage = {
@@ -384,25 +457,35 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             <Cpu className="w-3 h-3 text-sky-400" />
             <span>自動注入コンテキスト (画面連動)</span>
           </span>
-          <div className="flex items-center space-x-3">
-            <label
-              title={isSshAvailable ? '安全な読み取りコマンド(ls, cat等)で裏SSH自律調査を行います' : 'SSH接続時のみ利用可能です'}
-              className={`flex items-center space-x-1 text-[10px] ${
-                isSshAvailable ? 'text-sky-300 hover:text-sky-200 cursor-pointer' : 'text-slate-600 cursor-not-allowed'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={autoInspect && isSshAvailable}
-                disabled={!isSshAvailable}
-                onChange={(e) => setAutoInspect(e.target.checked)}
-                className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3 h-3 disabled:opacity-30"
-              />
-              <span className="flex items-center space-x-0.5">
-                <Search className="w-3 h-3 text-sky-400" />
-                <span>自律環境調査</span>
-              </span>
-            </label>
+          <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-1">
+              <label
+                title={isSshAvailable ? '安全な読み取りコマンド(ls, cat等)で裏SSH自律調査を行います' : 'SSH接続時のみ利用可能です'}
+                className={`flex items-center space-x-1 text-[10px] ${
+                  isSshAvailable ? 'text-sky-300 hover:text-sky-200 cursor-pointer' : 'text-slate-600 cursor-not-allowed'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoInspect && isSshAvailable}
+                  disabled={!isSshAvailable}
+                  onChange={(e) => setAutoInspect(e.target.checked)}
+                  className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3 h-3 disabled:opacity-30"
+                />
+                <span className="flex items-center space-x-0.5">
+                  <Search className="w-3 h-3 text-sky-400" />
+                  <span>自律調査</span>
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowCommandSettings(true)}
+                title={`許可コマンド設定 (${allowedCommands.length}件許可中)`}
+                className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800/80 transition-colors"
+              >
+                <SlidersHorizontal className="w-3 h-3 text-slate-400 hover:text-sky-300" />
+              </button>
+            </div>
 
             <label className="flex items-center space-x-1 text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer">
               <input
@@ -668,6 +751,107 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
           )}
         </div>
       </div>
+
+      {/* Allowed Commands Setting Modal */}
+      {showCommandSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-md w-full p-4 space-y-3.5 text-xs text-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center space-x-2 text-sky-400 font-semibold text-xs">
+                <SlidersHorizontal className="w-4 h-4" />
+                <span>AI自律調査 許可コマンド設定</span>
+              </div>
+              <button
+                onClick={() => setShowCommandSettings(false)}
+                className="text-slate-400 hover:text-slate-200 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              AI（Claude）がリモートサーバーを裏で自律調査する際に、実行を許可する安全な読み取りコマンドを選択・追加してください。
+            </p>
+
+            {/* Presets */}
+            <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto p-1 border border-slate-800/80 rounded-lg bg-slate-950/40">
+              {PRESET_COMMANDS.map((item) => {
+                const checked = allowedCommands.includes(item.cmd);
+                return (
+                  <label
+                    key={item.cmd}
+                    className={`flex items-center space-x-2 p-1.5 rounded border transition-colors cursor-pointer text-[11px] ${
+                      checked
+                        ? 'bg-sky-950/50 border-sky-700/60 text-sky-200'
+                        : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleCommand(item.cmd)}
+                      className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3.5 h-3.5"
+                    />
+                    <span className="font-mono text-[10px] text-sky-300 font-semibold">{item.cmd}</span>
+                    <span className="text-[9px] text-slate-500 truncate">({item.desc})</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            {/* Custom Input */}
+            <div className="space-y-1.5 pt-1">
+              <label className="text-[10px] text-slate-400 font-medium">カスタム追加コマンド (カンマ区切り):</label>
+              <div className="flex space-x-2">
+                <input
+                  type="text"
+                  value={customCommandInput}
+                  onChange={(e) => setCustomCommandInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCustomCommand();
+                    }
+                  }}
+                  placeholder="例: who, hostname, ip"
+                  className="flex-1 px-2.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-sky-500 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCustomCommand}
+                  className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors"
+                >
+                  追加
+                </button>
+              </div>
+            </div>
+
+            {/* Status Summary */}
+            <div className="text-[10px] text-slate-400 bg-slate-950/60 p-2 rounded border border-slate-800 break-words leading-relaxed font-mono">
+              <span className="text-slate-500 font-sans">現在許可 ({allowedCommands.length}件): </span>
+              {allowedCommands.join(', ')}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => saveAllowedCommands(DEFAULT_ALLOWED_COMMANDS)}
+                className="text-[10px] text-slate-400 hover:text-amber-400 underline transition-colors"
+              >
+                デフォルトに戻す
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCommandSettings(false)}
+                className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs transition-colors"
+              >
+                設定完了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

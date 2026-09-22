@@ -187,6 +187,7 @@ export interface AICommandSnippet {
 
 export interface AIInspectLog {
   command: string;
+  reason?: string;
   output: string;
   error?: string;
   duration?: string;
@@ -218,6 +219,7 @@ export interface AIChatRequest {
   context: AIChatContext;
   model?: string;
   autoInspect?: boolean;
+  allowedCommands?: string[];
 }
 
 export interface AIChatResponse {

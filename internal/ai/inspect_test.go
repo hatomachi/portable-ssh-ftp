@@ -143,30 +143,13 @@ func (m *mockExecutor) RunCommandWithLimit(ctx context.Context, cmd string, maxB
 	return "", fmt.Errorf("command not found in mock: %s", cmd)
 }
 
-func TestBuildInspectPlanPrompt(t *testing.T) {
-	svc := NewService("")
-	req := ChatRequest{
-		Prompt: "Nginxのアクセスログから404が多いURLを集計して",
-		Context: ChatContext{
-			Host:       "prod-web-01",
-			User:       "nginx",
-			CurrentDir: "/var/log",
-			Files:      []FileItem{{Name: "nginx", IsDir: true}},
-		},
+func TestMCPToolListSchema(t *testing.T) {
+	server := NewMCPServer("test-token", nil, []string{"ls", "cat", "df", "free"})
+	if len(server.allowedCommands) != 4 {
+		t.Fatalf("expected 4 allowed commands, got %d", len(server.allowedCommands))
 	}
-
-	planPrompt := svc.buildInspectPlanPrompt(req)
-	if !strings.Contains(planPrompt, "INSPECT:") {
-		t.Errorf("plan prompt should contain INSPECT:")
-	}
-	if !strings.Contains(planPrompt, "NONE") {
-		t.Errorf("plan prompt should contain NONE")
-	}
-	if !strings.Contains(planPrompt, "prod-web-01") {
-		t.Errorf("plan prompt should contain host")
-	}
-	if !strings.Contains(planPrompt, "Nginxのアクセスログから404が多いURLを集計して") {
-		t.Errorf("plan prompt should contain user prompt")
+	if !server.allowedMap["df"] || !server.allowedMap["free"] {
+		t.Errorf("expected df and free in allowedMap")
 	}
 }
 
