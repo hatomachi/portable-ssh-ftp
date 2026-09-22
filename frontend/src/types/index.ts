@@ -57,6 +57,8 @@ export interface SshListResponse {
   entries: FileEntry[];
 }
 
+export type LineEnding = 'LF' | 'CRLF' | 'CR' | 'Mixed' | 'None' | 'preserve';
+
 export interface FilePreviewResponse {
   path: string;
   name: string;
@@ -64,6 +66,36 @@ export interface FilePreviewResponse {
   content: string;
   truncated: boolean;
 }
+
+export interface FileReadResponse {
+  path: string;
+  name: string;
+  size: number;
+  content: string;
+  lineEnding: LineEnding;
+  charset: string;
+  truncated: boolean;
+  isBinary: boolean;
+  editable: boolean;
+  readonlyReason?: string;
+}
+
+export interface FileSaveRequest {
+  path: string;
+  content: string;
+  lineEnding: LineEnding;
+  charset?: string;
+  createBackup: boolean;
+}
+
+export interface FileSaveResponse {
+  status: string;
+  path: string;
+  backupPath?: string;
+  size: number;
+  lineEnding: LineEnding;
+}
+
 
 export interface CommandHistoryItem {
   id: string;

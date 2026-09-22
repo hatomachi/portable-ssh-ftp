@@ -26,6 +26,7 @@ type FileEntry struct {
 }
 
 // ListFiles lists files in targetPath.
+
 // If targetPath is empty or ".", it lists the current directory / home directory.
 // Returns the resolved absolute path and the list of FileEntry items.
 func (c *Client) ListFiles(targetPath string) (string, []FileEntry, error) {
@@ -556,4 +557,344 @@ func (c *Client) DownloadFile(remotePath string, w io.Writer) error {
 
 	return nil
 }
+
+// ReadFileFull reads the entire file up to maxBytes (default MaxEditableFileSize = 2MB).
+// Checks for binary data and detects line endings.
+func (c *Client) ReadFileFull(targetPath string, maxBytes int64, charset encoding.Charset) (*encoding.FileReadResult, error) {
+	if maxBytes <= 0 {
+		maxBytes = encoding.MaxEditableFileSize
+	}
+	if charset == "" {
+		charset = encoding.CharsetUTF8
+	}
+
+	// Try SFTP first
+	sftpClient, err := c.GetSFTPClient()
+	if err == nil {
+		res, sftpErr := c.readFileFullSFTP(sftpClient, targetPath, maxBytes, charset)
+		if sftpErr == nil {
+			return res, nil
+		}
+		c.ResetSFTPClient()
+	}
+
+	// Fallback to SSH exec
+	return c.readFileFullExec(targetPath, maxBytes, charset)
+}
+
+func (c *Client) readFileFullSFTP(client *sftp.Client, targetPath string, maxBytes int64, charset encoding.Charset) (*encoding.FileReadResult, error) {
+	fi, err := client.Stat(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat failed for %s: %w", targetPath, err)
+	}
+
+	totalSize := fi.Size()
+	name := fi.Name()
+
+	file, err := client.Open(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("open failed for %s: %w", targetPath, err)
+	}
+	defer file.Close()
+
+	if totalSize > maxBytes {
+		// Read only up to 64KB for preview if file is too large
+		buf := make([]byte, 65536)
+		n, _ := io.ReadFull(file, buf)
+		previewData := buf[:n]
+		decoded, _ := encoding.Decode(previewData, charset)
+		return &encoding.FileReadResult{
+			Path:           targetPath,
+			Name:           name,
+			Size:           totalSize,
+			Content:        decoded,
+			LineEnding:     encoding.DetectLineEnding(previewData),
+			Charset:        string(charset),
+			Truncated:      true,
+			IsBinary:       encoding.IsBinary(previewData),
+			Editable:       false,
+			ReadonlyReason: "FILE_TOO_LARGE",
+		}, nil
+	}
+
+	// Read all data
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("read failed for %s: %w", targetPath, err)
+	}
+
+	isBin := encoding.IsBinary(data)
+	lineEnding := encoding.DetectLineEnding(data)
+	decoded, decErr := encoding.Decode(data, charset)
+	if decErr != nil {
+		decoded = string(data)
+	}
+
+	editable := !isBin
+	var readonlyReason string
+	if isBin {
+		readonlyReason = "BINARY_FILE"
+	}
+
+	return &encoding.FileReadResult{
+		Path:           targetPath,
+		Name:           name,
+		Size:           totalSize,
+		Content:        decoded,
+		LineEnding:     lineEnding,
+		Charset:        string(charset),
+		Truncated:      false,
+		IsBinary:       isBin,
+		Editable:       editable,
+		ReadonlyReason: readonlyReason,
+	}, nil
+}
+
+func (c *Client) readFileFullExec(targetPath string, maxBytes int64, charset encoding.Charset) (*encoding.FileReadResult, error) {
+	name, totalSize, err := c.StatFile(targetPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if totalSize > maxBytes {
+		previewContent, _, _, _ := c.readFileHeadExec(targetPath, 65536)
+		return &encoding.FileReadResult{
+			Path:           targetPath,
+			Name:           name,
+			Size:           totalSize,
+			Content:        previewContent,
+			LineEnding:     encoding.DetectLineEnding([]byte(previewContent)),
+			Charset:        string(charset),
+			Truncated:      true,
+			IsBinary:       encoding.IsBinary([]byte(previewContent)),
+			Editable:       false,
+			ReadonlyReason: "FILE_TOO_LARGE",
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := c.DownloadFile(targetPath, &stdout); err != nil {
+		return nil, err
+	}
+
+	data := stdout.Bytes()
+	isBin := encoding.IsBinary(data)
+	lineEnding := encoding.DetectLineEnding(data)
+	decoded, decErr := encoding.Decode(data, charset)
+	if decErr != nil {
+		decoded = string(data)
+	}
+
+	editable := !isBin
+	var readonlyReason string
+	if isBin {
+		readonlyReason = "BINARY_FILE"
+	}
+
+	return &encoding.FileReadResult{
+		Path:           targetPath,
+		Name:           name,
+		Size:           int64(len(data)),
+		Content:        decoded,
+		LineEnding:     lineEnding,
+		Charset:        string(charset),
+		Truncated:      false,
+		IsBinary:       isBin,
+		Editable:       editable,
+		ReadonlyReason: readonlyReason,
+	}, nil
+}
+
+// SaveFile saves content to targetPath safely.
+// Normalizes line endings, encodes to target charset, creates backup if requested,
+// and performs atomic write to prevent corruption on connection drops.
+func (c *Client) SaveFile(targetPath string, content string, targetLineEnding encoding.LineEnding, charset encoding.Charset, createBackup bool) (*encoding.FileSaveResult, error) {
+	if targetPath == "" {
+		return nil, fmt.Errorf("targetPath cannot be empty")
+	}
+	if charset == "" {
+		charset = encoding.CharsetUTF8
+	}
+
+	// 1. Line ending normalization
+	normalized := encoding.NormalizeLineEnding(content, targetLineEnding)
+	appliedEnding := encoding.DetectLineEnding([]byte(normalized))
+	if appliedEnding == encoding.LineEndingNone {
+		appliedEnding = targetLineEnding
+	}
+
+	// 2. Character encoding
+	encodedBytes, err := encoding.Encode(normalized, charset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode content with charset %s: %w", charset, err)
+	}
+
+	// Try SFTP first
+	sftpClient, err := c.GetSFTPClient()
+	if err == nil {
+		res, sftpErr := c.saveFileSFTP(sftpClient, targetPath, encodedBytes, appliedEnding, createBackup)
+		if sftpErr == nil {
+			return res, nil
+		}
+		c.ResetSFTPClient()
+	}
+
+	// Fallback to SSH exec
+	return c.saveFileExec(targetPath, encodedBytes, appliedEnding, createBackup)
+}
+
+func (c *Client) saveFileSFTP(client *sftp.Client, targetPath string, data []byte, lineEnding encoding.LineEnding, createBackup bool) (*encoding.FileSaveResult, error) {
+	var origMode os.FileMode = 0644
+	fi, statErr := client.Stat(targetPath)
+	if statErr == nil {
+		origMode = fi.Mode()
+	}
+
+	var backupPath string
+	if createBackup && statErr == nil {
+		backupPath = fmt.Sprintf("%s.%s.bak", targetPath, time.Now().Format("20060102_150405"))
+		if err := copySFTPFile(client, targetPath, backupPath, origMode); err != nil {
+			return nil, fmt.Errorf("failed to create backup before saving: %w", err)
+		}
+	}
+
+	dir := path.Dir(targetPath)
+	base := path.Base(targetPath)
+	tmpPath := path.Join(dir, fmt.Sprintf(".%s.tmp.%d", base, time.Now().UnixNano()))
+
+	tmpFile, err := client.Create(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file for saving: %w", err)
+	}
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		_ = client.Remove(tmpPath)
+		return nil, fmt.Errorf("failed to write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	if origMode != 0 {
+		_ = client.Chmod(tmpPath, origMode)
+	}
+
+	if posixErr := client.PosixRename(tmpPath, targetPath); posixErr != nil {
+		if renameErr := client.Rename(tmpPath, targetPath); renameErr != nil {
+			_ = client.Remove(targetPath)
+			if err := client.Rename(tmpPath, targetPath); err != nil {
+				return nil, fmt.Errorf("failed to replace target file: %w", err)
+			}
+		}
+	}
+
+	return &encoding.FileSaveResult{
+		Status:     "saved",
+		Path:       targetPath,
+		BackupPath: backupPath,
+		Size:       int64(len(data)),
+		LineEnding: lineEnding,
+	}, nil
+}
+
+func copySFTPFile(client *sftp.Client, src, dst string, mode os.FileMode) error {
+	sFile, err := client.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sFile.Close()
+
+	dFile, err := client.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dFile.Close()
+
+	if _, err := io.Copy(dFile, sFile); err != nil {
+		return err
+	}
+	if mode != 0 {
+		_ = client.Chmod(dst, mode)
+	}
+	return nil
+}
+
+func (c *Client) saveFileExec(targetPath string, data []byte, lineEnding encoding.LineEnding, createBackup bool) (*encoding.FileSaveResult, error) {
+	dir := path.Dir(targetPath)
+	base := path.Base(targetPath)
+	tmpPath := path.Join(dir, fmt.Sprintf(".%s.tmp.%d", base, time.Now().UnixNano()))
+
+	var backupPath string
+	if createBackup {
+		backupPath = fmt.Sprintf("%s.%s.bak", targetPath, time.Now().Format("20060102_150405"))
+	}
+
+	session, err := c.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		session.Close()
+		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
+
+	var stderr bytes.Buffer
+	session.Stderr = &stderr
+
+	script := fmt.Sprintf("cat > %s", quoteShellArg(tmpPath))
+	if err := session.Start(script); err != nil {
+		stdin.Close()
+		session.Close()
+		return nil, fmt.Errorf("failed to start write command: %w", err)
+	}
+
+	if _, err := io.Copy(stdin, bytes.NewReader(data)); err != nil {
+		stdin.Close()
+		session.Close()
+		return nil, fmt.Errorf("failed writing data: %w", err)
+	}
+	stdin.Close()
+
+	if err := session.Wait(); err != nil {
+		session.Close()
+		return nil, fmt.Errorf("failed writing tmp file: %s", strings.TrimSpace(stderr.String()))
+	}
+	session.Close()
+
+	backupCmd := ""
+	if backupPath != "" {
+		backupCmd = fmt.Sprintf(`if [ -e %s ]; then cp -p %s %s 2>/dev/null || cp %s %s; fi && `,
+			quoteShellArg(targetPath), quoteShellArg(targetPath), quoteShellArg(backupPath),
+			quoteShellArg(targetPath), quoteShellArg(backupPath))
+	}
+
+	replaceScript := fmt.Sprintf(`sh -c '%s
+if [ -e %s ]; then
+  chmod --reference=%s %s 2>/dev/null || true
+fi
+mv -f %s %s
+'`, backupCmd, quoteShellArg(targetPath), quoteShellArg(targetPath), quoteShellArg(tmpPath), quoteShellArg(tmpPath), quoteShellArg(targetPath))
+
+	replaceSession, err := c.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session for replace: %w", err)
+	}
+	defer replaceSession.Close()
+
+	var replaceStderr bytes.Buffer
+	replaceSession.Stderr = &replaceStderr
+	if err := replaceSession.Run(replaceScript); err != nil {
+		return nil, fmt.Errorf("failed to move temp file into place: %s", strings.TrimSpace(replaceStderr.String()))
+	}
+
+	return &encoding.FileSaveResult{
+		Status:     "saved",
+		Path:       targetPath,
+		BackupPath: backupPath,
+		Size:       int64(len(data)),
+		LineEnding: lineEnding,
+	}, nil
+}
+
 

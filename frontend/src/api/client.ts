@@ -5,6 +5,9 @@ import type {
   FtpListResponse, 
   SshListResponse, 
   FilePreviewResponse,
+  FileReadResponse,
+  FileSaveRequest,
+  FileSaveResponse,
   SessionSummary,
   ConnectionProfile
 } from '../types';
@@ -239,5 +242,51 @@ export function sendShutdownBeacon(): void {
 export async function requestShutdown(): Promise<void> {
   await fetch(`${API_BASE}/shutdown`, { method: 'POST' }).catch(() => {});
 }
+
+export async function readRemoteFile(
+  sessionId: string,
+  path: string,
+  protocol: 'ssh' | 'ftp',
+  charset?: string,
+  maxBytes?: number
+): Promise<FileReadResponse> {
+  const params = new URLSearchParams({
+    sessionId,
+    path,
+  });
+  if (charset) params.set('charset', charset);
+  if (maxBytes) params.set('maxBytes', maxBytes.toString());
+
+  const endpoint = protocol === 'ssh' ? `${API_BASE}/ssh/file/read` : `${API_BASE}/ftp/file/read`;
+  const res = await fetch(`${endpoint}?${params.toString()}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'ファイルの読み込みに失敗しました');
+  }
+  return data;
+}
+
+export async function saveRemoteFile(
+  sessionId: string,
+  protocol: 'ssh' | 'ftp',
+  req: FileSaveRequest
+): Promise<FileSaveResponse> {
+  const endpoint = protocol === 'ssh' ? `${API_BASE}/ssh/file/save` : `${API_BASE}/ftp/file/save`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId,
+      ...req,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'ファイルの保存に失敗しました');
+  }
+  return data;
+}
+
 
 

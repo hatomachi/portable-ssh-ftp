@@ -234,3 +234,44 @@ func TestAPI_Lifecycle(t *testing.T) {
 	}
 }
 
+func TestAPI_FileReadSave_Validation(t *testing.T) {
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	// 1. SSH file read without session -> 400
+	req := httptest.NewRequest(http.MethodGet, "/api/ssh/file/read?sessionId=invalid&path=/test.txt", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing SSH session, got %d", w.Code)
+	}
+
+	// 2. FTP file read without session -> 400
+	req = httptest.NewRequest(http.MethodGet, "/api/ftp/file/read?sessionId=invalid&path=/test.txt", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing FTP session, got %d", w.Code)
+	}
+
+	// 3. SSH file save without body -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/ssh/file/save", strings.NewReader(`{}`))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty save body, got %d", w.Code)
+	}
+
+	// 4. FTP file save without body -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/ftp/file/save", strings.NewReader(`{}`))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty save body, got %d", w.Code)
+	}
+}
+
+

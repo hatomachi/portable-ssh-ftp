@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"portable-ssh-ftp/internal/config"
+	"portable-ssh-ftp/internal/encoding"
 	"portable-ssh-ftp/internal/lifecycle"
 	"portable-ssh-ftp/internal/logger"
 	"portable-ssh-ftp/internal/session"
@@ -47,9 +48,15 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ftp/upload", a.handleFTPUpload)
 	mux.HandleFunc("/api/ftp/delete", a.handleFTPDelete)
 	mux.HandleFunc("/api/ftp/mkdir", a.handleFTPMkdir)
+	mux.HandleFunc("/api/ftp/file/read", a.handleFTPFileRead)
+	mux.HandleFunc("POST /api/ftp/file/save", a.handleFTPFileSave)
 
 	mux.HandleFunc("/api/ssh/files", a.handleSSHFiles)
 	mux.HandleFunc("/api/ssh/file/view", a.handleSSHFileView)
+	mux.HandleFunc("/api/ssh/file/read", a.handleSSHFileRead)
+	mux.HandleFunc("GET /api/session/{id}/ssh/file/read", a.handleSessionSSHFileRead)
+	mux.HandleFunc("POST /api/ssh/file/save", a.handleSSHFileSave)
+	mux.HandleFunc("POST /api/session/{id}/ssh/file/save", a.handleSessionSSHFileSave)
 	mux.HandleFunc("/api/ssh/upload", a.handleSSHUpload)
 	mux.HandleFunc("/api/ssh/download", a.handleSSHDownload)
 	mux.HandleFunc("GET /api/session/{id}/ssh/files", a.handleSessionSSHFiles)
@@ -371,6 +378,77 @@ func (a *API) handleFTPMkdir(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *API) handleFTPFileRead(w http.ResponseWriter, r *http.Request) {
+	sess, err := a.getFTPClient(r)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		errorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	var maxBytes int64 = encoding.MaxEditableFileSize
+	if mbStr := r.URL.Query().Get("maxBytes"); mbStr != "" {
+		if mb, err := strconv.ParseInt(mbStr, 10, 64); err == nil && mb > 0 {
+			maxBytes = mb
+		}
+	}
+
+	res, err := sess.FTPClient.ReadFileFull(remotePath, maxBytes)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, res)
+}
+
+func (a *API) handleFTPFileSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID    string              `json:"sessionId"`
+		Path         string              `json:"path"`
+		Content      string              `json:"content"`
+		LineEnding   encoding.LineEnding `json:"lineEnding"`
+		CreateBackup bool                `json:"createBackup"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if req.SessionID == "" {
+		req.SessionID = r.URL.Query().Get("sessionId")
+	}
+	sess, ok := a.mgr.GetSession(req.SessionID)
+	if !ok || sess.FTPClient == nil {
+		errorResponse(w, http.StatusBadRequest, "FTP not connected")
+		return
+	}
+
+	if req.Path == "" {
+		errorResponse(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	res, err := sess.FTPClient.SaveFile(req.Path, req.Content, req.LineEnding, req.CreateBackup)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, res)
+}
+
 func (a *API) getSSHClient(sessionID string) (*session.Session, error) {
 	sess, ok := a.mgr.GetSession(sessionID)
 	if !ok || sess.SSHClient == nil {
@@ -449,6 +527,104 @@ func (a *API) handleSessionSSHFileView(w http.ResponseWriter, r *http.Request) {
 	r.URL.RawQuery = q.Encode()
 	a.handleSSHFileView(w, r)
 }
+
+func (a *API) handleSSHFileRead(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("sessionId")
+	sess, err := a.getSSHClient(sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	remotePath := r.URL.Query().Get("path")
+	if remotePath == "" {
+		errorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	var maxBytes int64 = encoding.MaxEditableFileSize
+	if mbStr := r.URL.Query().Get("maxBytes"); mbStr != "" {
+		if mb, err := strconv.ParseInt(mbStr, 10, 64); err == nil && mb > 0 {
+			maxBytes = mb
+		}
+	}
+
+	charset := encoding.Charset(r.URL.Query().Get("charset"))
+	if charset == "" {
+		charset = encoding.CharsetUTF8
+	}
+
+	res, err := sess.SSHClient.ReadFileFull(remotePath, maxBytes, charset)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, res)
+}
+
+func (a *API) handleSessionSSHFileRead(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Set("sessionId", r.PathValue("id"))
+	r.URL.RawQuery = q.Encode()
+	a.handleSSHFileRead(w, r)
+}
+
+func (a *API) handleSSHFileSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID    string              `json:"sessionId"`
+		Path         string              `json:"path"`
+		Content      string              `json:"content"`
+		LineEnding   encoding.LineEnding `json:"lineEnding"`
+		Charset      encoding.Charset    `json:"charset"`
+		CreateBackup bool                `json:"createBackup"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if req.SessionID == "" {
+		req.SessionID = r.PathValue("id")
+	}
+	if req.SessionID == "" {
+		req.SessionID = r.URL.Query().Get("sessionId")
+	}
+
+	sess, err := a.getSSHClient(req.SessionID)
+	if err != nil {
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.Path == "" {
+		errorResponse(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	if req.Charset == "" {
+		req.Charset = encoding.CharsetUTF8
+	}
+
+	res, err := sess.SSHClient.SaveFile(req.Path, req.Content, req.LineEnding, req.Charset, req.CreateBackup)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, res)
+}
+
+func (a *API) handleSessionSSHFileSave(w http.ResponseWriter, r *http.Request) {
+	a.handleSSHFileSave(w, r)
+}
+
 
 func (a *API) handleSSHUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

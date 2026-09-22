@@ -1,6 +1,7 @@
 package ftp
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"path"
@@ -228,3 +229,117 @@ func (c *Client) MakeDir(remotePath string) error {
 
 	return c.conn.MakeDir(string(encodedPath))
 }
+
+// ReadFileFull downloads and reads the remote file up to maxBytes (default MaxEditableFileSize = 2MB).
+// Checks for binary data and detects line endings.
+func (c *Client) ReadFileFull(remotePath string, maxBytes int64) (*encoding.FileReadResult, error) {
+	if maxBytes <= 0 {
+		maxBytes = encoding.MaxEditableFileSize
+	}
+
+	reader, err := c.Download(remotePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download ftp file %s: %w", remotePath, err)
+	}
+	defer reader.Close()
+
+	limitedReader := io.LimitReader(reader, maxBytes+1)
+	data, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ftp file data %s: %w", remotePath, err)
+	}
+
+	totalSize := int64(len(data))
+	truncated := totalSize > maxBytes
+	name := path.Base(remotePath)
+
+	if truncated {
+		data = data[:maxBytes]
+		previewLen := len(data)
+		if previewLen > 65536 {
+			previewLen = 65536
+		}
+		decoded, _ := encoding.Decode(data[:previewLen], c.cfg.Charset)
+		return &encoding.FileReadResult{
+			Path:           remotePath,
+			Name:           name,
+			Size:           totalSize,
+			Content:        decoded,
+			LineEnding:     encoding.DetectLineEnding(data),
+			Charset:        string(c.cfg.Charset),
+			Truncated:      true,
+			IsBinary:       encoding.IsBinary(data),
+			Editable:       false,
+			ReadonlyReason: "FILE_TOO_LARGE",
+		}, nil
+	}
+
+	isBin := encoding.IsBinary(data)
+	lineEnding := encoding.DetectLineEnding(data)
+	decoded, decErr := encoding.Decode(data, c.cfg.Charset)
+	if decErr != nil {
+		decoded = string(data)
+	}
+
+	editable := !isBin
+	var readonlyReason string
+	if isBin {
+		readonlyReason = "BINARY_FILE"
+	}
+
+	return &encoding.FileReadResult{
+		Path:           remotePath,
+		Name:           name,
+		Size:           int64(len(data)),
+		Content:        decoded,
+		LineEnding:     lineEnding,
+		Charset:        string(c.cfg.Charset),
+		Truncated:      false,
+		IsBinary:       isBin,
+		Editable:       editable,
+		ReadonlyReason: readonlyReason,
+	}, nil
+}
+
+// SaveFile normalizes line endings, encodes with FTP charset, creates backup if requested, and uploads.
+func (c *Client) SaveFile(remotePath string, content string, targetLineEnding encoding.LineEnding, createBackup bool) (*encoding.FileSaveResult, error) {
+	if remotePath == "" {
+		return nil, fmt.Errorf("remotePath cannot be empty")
+	}
+
+	// 1. Line ending normalization
+	normalized := encoding.NormalizeLineEnding(content, targetLineEnding)
+	appliedEnding := encoding.DetectLineEnding([]byte(normalized))
+	if appliedEnding == encoding.LineEndingNone {
+		appliedEnding = targetLineEnding
+	}
+
+	// 2. Character encoding
+	encodedBytes, err := encoding.Encode(normalized, c.cfg.Charset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode content with charset %s: %w", c.cfg.Charset, err)
+	}
+
+	var backupPath string
+	if createBackup {
+		backupPath = fmt.Sprintf("%s.%s.bak", remotePath, time.Now().Format("20060102_150405"))
+		if origReader, err := c.Download(remotePath); err == nil {
+			_ = c.Upload(backupPath, origReader)
+			origReader.Close()
+		}
+	}
+
+	// 3. Upload new content
+	if err := c.Upload(remotePath, bytes.NewReader(encodedBytes)); err != nil {
+		return nil, fmt.Errorf("failed to upload saved file to %s: %w", remotePath, err)
+	}
+
+	return &encoding.FileSaveResult{
+		Status:     "saved",
+		Path:       remotePath,
+		BackupPath: backupPath,
+		Size:       int64(len(encodedBytes)),
+		LineEnding: appliedEnding,
+	}, nil
+}
+

@@ -15,12 +15,13 @@ import {
   Check, 
   Terminal as TerminalIcon, 
   Eye, 
+  Edit3,
   ArrowUpDown, 
   ArrowUp as ArrowUpSort, 
   ArrowDown as ArrowDownSort, 
   CornerDownRight 
 } from 'lucide-react';
-import type { FileEntry, FilePreviewResponse } from '../types';
+import type { FileEntry, FileReadResponse } from '../types';
 import { 
   listFtpFiles, 
   getFtpPwd, 
@@ -29,11 +30,11 @@ import {
   deleteFtpItem, 
   createFtpDir, 
   fetchSshFiles, 
-  viewSshFile,
+  readRemoteFile,
   uploadSshFile,
   getSshDownloadUrl
 } from '../api/client';
-import { FilePreviewModal } from './FilePreviewModal';
+import { FileEditorModal } from './FileEditorModal';
 
 interface RemoteExplorerProps {
   sessionId: string;
@@ -82,11 +83,11 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
   // Copy path feedback
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
-  // File preview modal
-  const [previewModalOpen, setPreviewModalOpen] = useState(false);
-  const [previewData, setPreviewData] = useState<FilePreviewResponse | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  // File editor & preview modal
+  const [fileModalOpen, setFileModalOpen] = useState(false);
+  const [fileData, setFileData] = useState<FileReadResponse | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   // Send input to terminal helper
   const sendToTerminal = (text: string) => {
@@ -217,32 +218,21 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
     }
   };
 
-  // File Preview
-  const handlePreviewFile = async (item: FileEntry) => {
+  // Open File for Preview & Editing
+  const handleOpenFile = async (item: FileEntry) => {
     if (item.isDir) return;
-    setPreviewModalOpen(true);
-    setPreviewLoading(true);
-    setPreviewError(null);
-    setPreviewData(null);
+    setFileModalOpen(true);
+    setFileLoading(true);
+    setFileError(null);
+    setFileData(null);
 
     try {
-      if (mode === 'ssh') {
-        const data = await viewSshFile(sessionId, item.path);
-        setPreviewData(data);
-      } else {
-        // For FTP, preview text content if small
-        setPreviewData({
-          name: item.name,
-          path: item.path,
-          size: item.size,
-          content: `FTPファイルの即時表示: ダウンロードリンクから取得できます。\nURL: ${getDownloadUrl(sessionId, item.path)}`,
-          truncated: false,
-        });
-      }
+      const data = await readRemoteFile(sessionId, item.path, mode);
+      setFileData(data);
     } catch (err: any) {
-      setPreviewError(err.message || 'ファイルプレビューの取得に失敗しました');
+      setFileError(err.message || 'ファイルの読み込みに失敗しました');
     } finally {
-      setPreviewLoading(false);
+      setFileLoading(false);
     }
   };
 
@@ -250,11 +240,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
     if (item.isDir) {
       handleNavigate(item.path);
     } else {
-      if (mode === 'ssh') {
-        handlePreviewFile(item);
-      } else {
-        window.open(getDownloadUrl(sessionId, item.path), '_blank');
-      }
+      handleOpenFile(item);
     }
   };
 
@@ -745,15 +731,24 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                         </button>
                       )}
 
-                      {/* Preview for files */}
+                      {/* View & Edit for files */}
                       {!item.isDir && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handlePreviewFile(item); }}
-                          title="ファイルプレビュー"
-                          className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleOpenFile(item); }}
+                            title="編集 / プレビュー"
+                            className="p-1 rounded text-slate-400 hover:text-amber-400 hover:bg-slate-800"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleOpenFile(item); }}
+                            title="プレビュー"
+                            className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                        </>
                       )}
 
                       {/* Download (SSH & FTP) */}
@@ -798,15 +793,18 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
         <span className="truncate max-w-xs font-mono">{currentPath || '/'}</span>
       </div>
 
-      {/* Quick File Preview Modal */}
-      <FilePreviewModal
-        isOpen={previewModalOpen}
-        onClose={() => setPreviewModalOpen(false)}
-        previewData={previewData}
-        isLoading={previewLoading}
-        error={previewError}
+      {/* File Editor & Preview Modal with Safety Guards */}
+      <FileEditorModal
+        isOpen={fileModalOpen}
+        onClose={() => setFileModalOpen(false)}
+        fileData={fileData}
+        isLoading={fileLoading}
+        error={fileError}
+        sessionId={sessionId}
+        protocol={mode}
         onSendToTerminal={sendToTerminal}
-        downloadUrl={previewData?.path ? (mode === 'ssh' ? getSshDownloadUrl(sessionId, previewData.path) : getDownloadUrl(sessionId, previewData.path)) : undefined}
+        downloadUrl={fileData?.path ? (mode === 'ssh' ? getSshDownloadUrl(sessionId, fileData.path) : getDownloadUrl(sessionId, fileData.path)) : undefined}
+        onSaved={() => fetchFiles(currentPath, mode)}
       />
     </div>
   );
