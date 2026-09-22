@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Header } from './components/Header';
 import { TabBar } from './components/TabBar';
 import { ConnectModal } from './components/ConnectModal';
@@ -10,6 +10,10 @@ import { connectSession, disconnectSession, duplicateSession, listSessions } fro
 import { initLifecycle, exitApplication } from './utils/lifecycle';
 import { Terminal as TerminalIcon, FolderTree, Plug, Shield, Power, AlertTriangle } from 'lucide-react';
 
+const DEFAULT_EXPLORER_WIDTH = 280;
+const MIN_EXPLORER_WIDTH = 200;
+const STORAGE_EXPLORER_WIDTH_KEY = 'portable_ssh_explorer_width';
+
 export const App: React.FC = () => {
   const [tabs, setTabs] = useState<SessionTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>('');
@@ -19,6 +23,24 @@ export const App: React.FC = () => {
   const [isQuitModalOpen, setIsQuitModalOpen] = useState(false);
   const [isTerminated, setIsTerminated] = useState(false);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
+
+  // Explorer width resizing & persistence
+  const mainContainerRef = useRef<HTMLDivElement>(null);
+  const [explorerWidth, setExplorerWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_EXPLORER_WIDTH_KEY);
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= MIN_EXPLORER_WIDTH) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_EXPLORER_WIDTH;
+  });
+  const [isResizing, setIsResizing] = useState(false);
 
   // Initialize lifecycle (heartbeat & auto-shutdown)
   useEffect(() => {
@@ -189,6 +211,49 @@ export const App: React.FC = () => {
     await exitApplication();
   };
 
+  const handleMouseDownResizer = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  const handleResetExplorerWidth = () => {
+    setExplorerWidth(DEFAULT_EXPLORER_WIDTH);
+    try {
+      localStorage.setItem(STORAGE_EXPLORER_WIDTH_KEY, String(DEFAULT_EXPLORER_WIDTH));
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!mainContainerRef.current) return;
+      const rect = mainContainerRef.current.getBoundingClientRect();
+      const newWidth = e.clientX - rect.left;
+      const maxWidth = Math.max(MIN_EXPLORER_WIDTH, rect.width - 320); // ターミナルに最低320pxを確保
+      const clampedWidth = Math.min(Math.max(newWidth, MIN_EXPLORER_WIDTH), maxWidth);
+      setExplorerWidth(clampedWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        localStorage.setItem(STORAGE_EXPLORER_WIDTH_KEY, String(explorerWidth));
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, explorerWidth]);
+
   const hasTabs = tabs.length > 0;
 
   if (isTerminated) {
@@ -240,7 +305,7 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 relative overflow-hidden flex flex-row">
-        <div className="flex-1 h-full relative overflow-hidden flex flex-col">
+        <div ref={mainContainerRef} className="flex-1 h-full relative overflow-hidden flex flex-col">
           {hasTabs ? (
           tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
@@ -255,7 +320,10 @@ export const App: React.FC = () => {
               >
                 {/* Remote File Explorer Pane (SSH / FTP) */}
                 {showExplorer && (
-                  <div className={`h-full ${showTerminal ? 'w-1/2 min-w-[320px]' : 'w-full'}`}>
+                  <div
+                    style={showTerminal ? { width: `${explorerWidth}px` } : { width: '100%' }}
+                    className={`h-full overflow-hidden ${showTerminal ? 'shrink-0' : 'w-full'}`}
+                  >
                     <RemoteExplorer
                       sessionId={tab.id}
                       sshConnected={tab.status.sshConnected}
@@ -264,9 +332,23 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
+                {/* Resizer Divider Bar between Explorer and Terminal */}
+                {showExplorer && showTerminal && (
+                  <div
+                    onMouseDown={handleMouseDownResizer}
+                    onDoubleClick={handleResetExplorerWidth}
+                    title="ドラッグでエクスプローラの幅を調整 / ダブルクリックでリセット"
+                    className={`w-1.5 h-full cursor-col-resize hover:bg-sky-500 active:bg-sky-400 transition-colors flex items-center justify-center shrink-0 z-10 group select-none ${
+                      isResizing ? 'bg-sky-500' : 'bg-slate-800'
+                    }`}
+                  >
+                    <div className="w-0.5 h-6 rounded-full bg-slate-600 group-hover:bg-white/90 group-active:bg-white transition-colors" />
+                  </div>
+                )}
+
                 {/* SSH Terminal Pane */}
                 {showTerminal && (
-                  <div className={`h-full ${showExplorer ? 'flex-1 min-w-[320px]' : 'w-full'}`}>
+                  <div className={`h-full overflow-hidden ${showExplorer ? 'flex-1 min-w-[320px]' : 'w-full'}`}>
                     <Terminal 
                       sessionId={tab.id} 
                       isActive={isActive}
@@ -348,6 +430,11 @@ export const App: React.FC = () => {
           />
         )}
       </main>
+
+      {/* Transparent overlay during resizer drag to prevent event capture */}
+      {isResizing && (
+        <div className="fixed inset-0 z-50 cursor-col-resize select-none" />
+      )}
 
       {/* Connect Dialog */}
       <ConnectModal

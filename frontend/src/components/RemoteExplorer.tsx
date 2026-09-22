@@ -90,6 +90,21 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
 
+  // Compact layout detection for narrow widths (< 380px)
+  const explorerRootRef = useRef<HTMLDivElement>(null);
+  const [isCompact, setIsCompact] = useState(false);
+
+  useEffect(() => {
+    if (!explorerRootRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setIsCompact(entry.contentRect.width < 380);
+      }
+    });
+    ro.observe(explorerRootRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   // Send input to terminal helper
   const sendToTerminal = (text: string) => {
     if (onSendToTerminal) {
@@ -367,6 +382,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
 
   return (
     <div 
+      ref={explorerRootRef}
       className="flex flex-col h-full w-full bg-slate-950 border-r border-slate-800 relative select-none"
       onDragOver={(e) => { 
         e.preventDefault(); 
@@ -420,7 +436,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
               }`}
             >
               <TerminalIcon className="w-3 h-3 text-emerald-400" />
-              <span>SSH Explorer</span>
+              <span>{isCompact ? 'SSH' : 'SSH Explorer'}</span>
             </button>
             <button
               onClick={() => setMode('ftp')}
@@ -431,31 +447,33 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
               }`}
             >
               <HardDrive className="w-3 h-3 text-blue-400" />
-              <span>FTP Explorer</span>
+              <span>{isCompact ? 'FTP' : 'FTP Explorer'}</span>
             </button>
           </div>
-          <span className="text-[10px] text-slate-500 font-mono">
-            {mode === 'ssh' ? 'SSH (Port 22)' : 'FTP (Port 21)'}
-          </span>
+          {!isCompact && (
+            <span className="text-[10px] text-slate-500 font-mono">
+              {mode === 'ssh' ? 'SSH (Port 22)' : 'FTP (Port 21)'}
+            </span>
+          )}
         </div>
       )}
 
       {/* Top Toolbar */}
-      <div className="h-10 px-3 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between space-x-2 text-xs">
+      <div className="h-10 px-2.5 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between space-x-1.5 text-xs">
         {/* Navigation Breadcrumb */}
-        <div className="flex items-center space-x-1 overflow-x-auto py-1 flex-1">
+        <div className="flex items-center space-x-1 overflow-x-auto py-1 flex-1 min-w-0">
           <button
             onClick={handleGoUp}
             disabled={!currentPath || currentPath === '/' || currentPath === '.'}
             title="親フォルダへ移動"
-            className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent"
+            className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent shrink-0"
           >
             <ArrowUp className="w-4 h-4" />
           </button>
 
           <button
             onClick={() => handleNavigate('/')}
-            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 font-mono"
+            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 font-mono shrink-0"
             title="ルートディレクトリへ移動"
           >
             <HardDrive className="w-3.5 h-3.5 text-slate-400" />
@@ -469,7 +487,9 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                 <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
                 <button
                   onClick={() => handleNavigate(subPath)}
-                  className="px-1.5 py-0.5 rounded text-slate-300 hover:text-sky-300 hover:bg-slate-800 font-mono truncate max-w-[120px]"
+                  className={`px-1.5 py-0.5 rounded text-slate-300 hover:text-sky-300 hover:bg-slate-800 font-mono truncate ${
+                    isCompact ? 'max-w-[70px]' : 'max-w-[120px]'
+                  }`}
                   title={part}
                 >
                   {part}
@@ -489,7 +509,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
               className="p-1.5 rounded text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition-colors flex items-center space-x-1"
             >
               <CornerDownRight className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden lg:inline text-[10px] text-emerald-400 font-mono">cd</span>
+              <span className={`${isCompact ? 'hidden' : 'hidden lg:inline'} text-[10px] text-emerald-400 font-mono`}>cd</span>
             </button>
           )}
 
@@ -526,7 +546,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
             className="p-1.5 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors flex items-center space-x-1"
           >
             <Upload className="w-4 h-4" />
-            <span className="hidden sm:inline text-[10px] text-sky-400 font-medium">Upload</span>
+            <span className={`${isCompact ? 'hidden' : 'hidden sm:inline'} text-[10px] text-sky-400 font-medium`}>Upload</span>
           </button>
           <input
             type="file"
@@ -587,7 +607,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
       )}
 
       {/* File List Table with Sorting */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-auto">
         <table className="w-full text-left text-xs text-slate-300 border-collapse">
           <thead className="sticky top-0 bg-slate-900 text-slate-400 border-b border-slate-800 text-[11px] select-none">
             <tr>
@@ -605,7 +625,7 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                 </div>
               </th>
               <th 
-                className="py-2 px-3 font-medium w-24 text-right cursor-pointer hover:text-slate-200"
+                className={`py-2 ${isCompact ? 'px-2 w-16' : 'px-3 w-24'} font-medium text-right cursor-pointer hover:text-slate-200`}
                 onClick={() => handleSortToggle('size')}
               >
                 <div className="flex items-center justify-end space-x-1">
@@ -617,26 +637,28 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                   )}
                 </div>
               </th>
-              <th 
-                className="py-2 px-3 font-medium w-36 text-right cursor-pointer hover:text-slate-200"
-                onClick={() => handleSortToggle('modTime')}
-              >
-                <div className="flex items-center justify-end space-x-1">
-                  <span>更新日時</span>
-                  {sortField === 'modTime' ? (
-                    sortOrder === 'asc' ? <ArrowUpSort className="w-3 h-3 text-sky-400" /> : <ArrowDownSort className="w-3 h-3 text-sky-400" />
-                  ) : (
-                    <ArrowUpDown className="w-3 h-3 text-slate-600" />
-                  )}
-                </div>
-              </th>
-              <th className="py-2 px-3 font-medium w-24 text-center">操作</th>
+              {!isCompact && (
+                <th 
+                  className="py-2 px-3 font-medium w-36 text-right cursor-pointer hover:text-slate-200"
+                  onClick={() => handleSortToggle('modTime')}
+                >
+                  <div className="flex items-center justify-end space-x-1">
+                    <span>更新日時</span>
+                    {sortField === 'modTime' ? (
+                      sortOrder === 'asc' ? <ArrowUpSort className="w-3 h-3 text-sky-400" /> : <ArrowDownSort className="w-3 h-3 text-sky-400" />
+                    ) : (
+                      <ArrowUpDown className="w-3 h-3 text-slate-600" />
+                    )}
+                  </div>
+                </th>
+              )}
+              <th className={`py-2 ${isCompact ? 'px-1.5 w-16' : 'px-3 w-24'} font-medium text-center`}>操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-900/60 font-mono">
             {sortedEntries.length === 0 && !isLoading && (
               <tr>
-                <td colSpan={4} className="py-8 text-center text-slate-500">
+                <td colSpan={isCompact ? 3 : 4} className="py-8 text-center text-slate-500">
                   {mode === 'ftp' ? 'フォルダは空です（ファイルをドロップしてアップロード可能）' : 'ディレクトリは空です'}
                 </td>
               </tr>
@@ -693,13 +715,15 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                       {item.name}
                     </span>
                   </td>
-                  <td className="py-1.5 px-3 text-right text-slate-400 text-[11px]">
+                  <td className={`py-1.5 ${isCompact ? 'px-2' : 'px-3'} text-right text-slate-400 text-[11px] whitespace-nowrap`}>
                     {item.isDir ? '-' : formatBytes(item.size)}
                   </td>
-                  <td className="py-1.5 px-3 text-right text-slate-500 text-[11px]">
-                    {formatTime(item.modTime)}
-                  </td>
-                  <td className="py-1.5 px-3 text-center">
+                  {!isCompact && (
+                    <td className="py-1.5 px-3 text-right text-slate-500 text-[11px] whitespace-nowrap">
+                      {formatTime(item.modTime)}
+                    </td>
+                  )}
+                  <td className={`py-1.5 ${isCompact ? 'px-1.5' : 'px-3'} text-center`}>
                     <div className="flex items-center justify-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       {/* Copy Path */}
                       <button
@@ -746,13 +770,15 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleOpenFile(item); }}
-                            title="プレビュー"
-                            className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
+                          {!isCompact && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleOpenFile(item); }}
+                              title="プレビュー"
+                              className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </>
                       )}
 
@@ -790,12 +816,12 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
 
       {/* Footer Info */}
       <div className="h-6 px-3 border-t border-slate-800 bg-slate-900/40 flex items-center justify-between text-[11px] text-slate-500">
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 shrink-0">
           <span>{entries.length} 項目</span>
           <span className="text-slate-700">|</span>
           <span className="font-mono text-slate-400">{mode.toUpperCase()}</span>
         </div>
-        <span className="truncate max-w-xs font-mono">{currentPath || '/'}</span>
+        <span className={`truncate ${isCompact ? 'max-w-[120px]' : 'max-w-xs'} font-mono`}>{currentPath || '/'}</span>
       </div>
 
       {/* File Editor & Preview Modal with Safety Guards */}
