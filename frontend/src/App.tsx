@@ -4,6 +4,7 @@ import { TabBar } from './components/TabBar';
 import { ConnectModal } from './components/ConnectModal';
 import { Terminal } from './components/Terminal';
 import { RemoteExplorer } from './components/RemoteExplorer';
+import { AIChatPanel } from './components/AIChatPanel';
 import type { SessionStatus, ConnectRequest, SessionTab } from './types';
 import { connectSession, disconnectSession, duplicateSession, listSessions } from './api/client';
 import { initLifecycle, exitApplication } from './utils/lifecycle';
@@ -17,6 +18,7 @@ export const App: React.FC = () => {
   const [isDuplicating, setIsDuplicating] = useState(false);
   const [isQuitModalOpen, setIsQuitModalOpen] = useState(false);
   const [isTerminated, setIsTerminated] = useState(false);
+  const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
 
   // Initialize lifecycle (heartbeat & auto-shutdown)
   useEffect(() => {
@@ -220,6 +222,8 @@ export const App: React.FC = () => {
         onDisconnect={handleDisconnectCurrent}
         onQuit={() => setIsQuitModalOpen(true)}
         isConnecting={isConnecting}
+        isAIOpen={isAIPanelOpen}
+        onToggleAI={() => setIsAIPanelOpen((prev) => !prev)}
       />
 
       {/* Tab Bar for Multi-session management */}
@@ -235,8 +239,9 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 relative overflow-hidden flex flex-col">
-        {hasTabs ? (
+      <main className="flex-1 relative overflow-hidden flex flex-row">
+        <div className="flex-1 h-full relative overflow-hidden flex flex-col">
+          {hasTabs ? (
           tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
             const hasExplorer = Boolean(tab.status.sshConnected || tab.status.ftpConnected);
@@ -330,6 +335,17 @@ export const App: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+        </div>
+
+        {/* AI Copilot Side Panel */}
+        {isAIPanelOpen && (
+          <AIChatPanel
+            sessionId={activeTabId}
+            sessionStatus={activeStatus}
+            isOpen={isAIPanelOpen}
+            onClose={() => setIsAIPanelOpen(false)}
+          />
         )}
       </main>
 

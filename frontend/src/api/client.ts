@@ -9,7 +9,10 @@ import type {
   FileSaveRequest,
   FileSaveResponse,
   SessionSummary,
-  ConnectionProfile
+  ConnectionProfile,
+  AIStatusResponse,
+  AIChatRequest,
+  AIChatResponse
 } from '../types';
 
 const API_BASE = '/api';
@@ -287,6 +290,29 @@ export async function saveRemoteFile(
   }
   return data;
 }
+
+export async function getAIStatus(): Promise<AIStatusResponse> {
+  const res = await fetch(`${API_BASE}/ai/status`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'AIステータスの取得に失敗しました');
+  }
+  return data;
+}
+
+export async function askAIChat(req: AIChatRequest): Promise<AIChatResponse> {
+  const res = await fetch(`${API_BASE}/ai/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'AIとの対話に失敗しました');
+  }
+  return data;
+}
+
 
 
 

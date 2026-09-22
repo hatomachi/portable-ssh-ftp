@@ -165,4 +165,55 @@ export interface ConnectionProfile {
   updatedAt?: string;
 }
 
+export interface AIStatusResponse {
+  available: boolean;
+  version?: string;
+  command?: string;
+  error?: string;
+}
+
+export interface AIFileItem {
+  name: string;
+  size: number;
+  isDir: boolean;
+  modTime?: string;
+}
+
+export interface AICommandSnippet {
+  command: string;
+  description?: string;
+  isDangerous: boolean;
+}
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  commands?: AICommandSnippet[];
+  timestamp: number;
+}
+
+export interface AIChatContext {
+  sessionId?: string;
+  host?: string;
+  user?: string;
+  isRoot?: boolean;
+  currentDir?: string;
+  files?: AIFileItem[];
+  terminalRecentOutput?: string;
+  history?: { role: string; content: string }[];
+}
+
+export interface AIChatRequest {
+  prompt: string;
+  context: AIChatContext;
+  model?: string;
+}
+
+export interface AIChatResponse {
+  reply: string;
+  commands: AICommandSnippet[];
+}
+
+
 

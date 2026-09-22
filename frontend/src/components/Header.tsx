@@ -6,7 +6,8 @@ import {
   Plug, 
   Unplug, 
   ShieldCheck,
-  Power
+  Power,
+  Sparkles
 } from 'lucide-react';
 import type { SessionStatus } from '../types';
 
@@ -18,6 +19,8 @@ interface HeaderProps {
   onDisconnect: () => void;
   onQuit: () => void;
   isConnecting: boolean;
+  isAIOpen: boolean;
+  onToggleAI: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -28,6 +31,8 @@ export const Header: React.FC<HeaderProps> = ({
   onDisconnect,
   onQuit,
   isConnecting,
+  isAIOpen,
+  onToggleAI,
 }) => {
   return (
     <header className="h-12 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between select-none">
@@ -113,6 +118,20 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </div>
         )}
+
+        {/* AI Copilot Toggle Button */}
+        <button
+          onClick={onToggleAI}
+          title={isAIOpen ? 'AI Copilot パネルを閉じる' : 'AI Copilot (Claude CLI) を開く'}
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded text-xs font-medium border transition-all mr-1 ${
+            isAIOpen
+              ? 'bg-sky-600 text-white border-sky-500 shadow-sm'
+              : 'bg-slate-800/90 text-sky-400 hover:text-sky-300 border-slate-700 hover:border-sky-700/60'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>AI Copilot</span>
+        </button>
 
         {/* Connect / Disconnect Buttons */}
         {status.connected ? (

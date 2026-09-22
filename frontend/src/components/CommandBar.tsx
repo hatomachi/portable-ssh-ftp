@@ -70,6 +70,26 @@ export const CommandBar: React.FC<CommandBarProps> = ({ onSend, isOpen, onToggle
     }
   }, []);
 
+  // Listen for external set command events (e.g. from AI Copilot snippet)
+  useEffect(() => {
+    const handleCommandBarSet = (e: Event) => {
+      const ce = e as CustomEvent<{ command: string; open?: boolean }>;
+      if (ce.detail?.command !== undefined) {
+        setInput(ce.detail.command);
+        if (ce.detail.open && !isOpen) {
+          onToggle();
+        }
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 100);
+      }
+    };
+    window.addEventListener('commandbar:set', handleCommandBarSet);
+    return () => {
+      window.removeEventListener('commandbar:set', handleCommandBarSet);
+    };
+  }, [isOpen, onToggle]);
+
   // Save history to localStorage
   const saveToHistory = (cmd: string) => {
     const trimmed = cmd.trim();

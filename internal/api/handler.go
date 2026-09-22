@@ -10,8 +10,10 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"portable-ssh-ftp/internal/ai"
 	"portable-ssh-ftp/internal/config"
 	"portable-ssh-ftp/internal/encoding"
 	"portable-ssh-ftp/internal/lifecycle"
@@ -23,13 +25,22 @@ type API struct {
 	mgr          *session.Manager
 	profileStore *config.ProfileStore
 	lifecycleMgr *lifecycle.Manager
+	aiSvc        *ai.Service
 }
 
 func NewAPI(mgr *session.Manager, profileStore *config.ProfileStore) *API {
 	if profileStore == nil {
 		profileStore = config.NewProfileStore("")
 	}
-	return &API{mgr: mgr, profileStore: profileStore}
+	return &API{
+		mgr:          mgr,
+		profileStore: profileStore,
+		aiSvc:        ai.NewService(""),
+	}
+}
+
+func (a *API) SetAIService(svc *ai.Service) {
+	a.aiSvc = svc
 }
 
 func (a *API) SetLifecycleManager(lm *lifecycle.Manager) {
@@ -81,6 +92,10 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/heartbeat", a.handleHeartbeat)
 	mux.HandleFunc("/api/shutdown-beacon", a.handleShutdownBeacon)
 	mux.HandleFunc("/api/shutdown", a.handleShutdown)
+
+	// AI Copilot (Claude CLI)
+	mux.HandleFunc("GET /api/ai/status", a.handleAIStatus)
+	mux.HandleFunc("POST /api/ai/chat", a.handleAIChat)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -931,5 +946,52 @@ func (a *API) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"status": "shutting_down"})
 }
+
+func (a *API) handleAIStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if a.aiSvc == nil {
+		jsonResponse(w, http.StatusOK, ai.StatusResponse{
+			Available: false,
+			Error:     "AI service is not configured",
+		})
+		return
+	}
+	res := a.aiSvc.CheckStatus(r.Context())
+	jsonResponse(w, http.StatusOK, res)
+}
+
+func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if a.aiSvc == nil {
+		errorResponse(w, http.StatusServiceUnavailable, "AI service is not configured")
+		return
+	}
+
+	var req ai.ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Prompt) == "" {
+		errorResponse(w, http.StatusBadRequest, "Prompt is required")
+		return
+	}
+
+	res, err := a.aiSvc.ExecuteChat(r.Context(), req)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, res)
+}
+
 
 

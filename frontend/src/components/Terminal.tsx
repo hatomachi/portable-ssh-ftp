@@ -5,6 +5,7 @@ import { Copy, Trash2, Check, FileCode, AlertTriangle, RefreshCw, Loader2, Uploa
 import { CommandBar } from './CommandBar';
 import { extractLastCommandAndOutput, formatAsMarkdownCodeBlock } from '../utils/terminalEvidence';
 import { reconnectSession, uploadSshFile } from '../api/client';
+import { registerTerminalInstance, unregisterTerminalInstance } from '../utils/aiContextManager';
 
 interface TerminalProps {
   sessionId: string;
@@ -217,6 +218,7 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true, 
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+    registerTerminalInstance(sessionId, term);
 
     // Connect WebSocket
     connectWebSocket(term);
@@ -283,6 +285,7 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, isActive = true, 
         wsRef.current = null;
       }
       term.dispose();
+      unregisterTerminalInstance(sessionId);
       xtermRef.current = null;
     };
   }, [sessionId, copyLastCommandMarkdown, connectWebSocket]);

@@ -274,4 +274,55 @@ func TestAPI_FileReadSave_Validation(t *testing.T) {
 	}
 }
 
+func TestAPI_AIStatus(t *testing.T) {
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/status", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 status, got %d", w.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if _, ok := resp["available"]; !ok {
+		t.Errorf("expected 'available' key in response")
+	}
+}
+
+func TestAPI_AIChat_Validation(t *testing.T) {
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	// 1. Missing prompt -> 400
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/chat", strings.NewReader(`{"prompt":""}`))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 status for empty prompt, got %d", w.Code)
+	}
+
+	// 2. Invalid json -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/ai/chat", strings.NewReader(`invalid json`))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 status for invalid json, got %d", w.Code)
+	}
+}
+
+
 

@@ -35,6 +35,7 @@ import {
   getSshDownloadUrl
 } from '../api/client';
 import { FileEditorModal } from './FileEditorModal';
+import { updateExplorerContext } from '../utils/aiContextManager';
 
 interface RemoteExplorerProps {
   sessionId: string;
@@ -114,16 +115,20 @@ export const RemoteExplorer: React.FC<RemoteExplorerProps> = ({
     try {
       if (protocolMode === 'ssh') {
         const data = await fetchSshFiles(sessionId, targetPath);
-        setEntries(data.entries || []);
+        const entries = data.entries || [];
+        setEntries(entries);
         const resolved = data.path || targetPath;
         setSshPath(resolved);
         window.dispatchEvent(new CustomEvent('explorer:path', { detail: { sessionId, path: resolved } }));
+        updateExplorerContext(sessionId, resolved, entries);
       } else {
         const data = await listFtpFiles(sessionId, targetPath);
-        setEntries(data.entries || []);
+        const entries = data.entries || [];
+        setEntries(entries);
         const resolved = data.path || targetPath;
         setFtpPath(resolved);
         window.dispatchEvent(new CustomEvent('explorer:path', { detail: { sessionId, path: resolved } }));
+        updateExplorerContext(sessionId, resolved, entries);
       }
     } catch (err: any) {
       setError(err.message || 'ファイル一覧の取得に失敗しました');
