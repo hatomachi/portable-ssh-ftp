@@ -2,14 +2,16 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag (e.g. v0.1.0)'
-        required: true
-        default: 'v0.1.0'
+        description: 'Release tag (e.g. v0.6.0)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -37,23 +39,33 @@ jobs:
         with:
           go-version: 'stable'
 
-      - name: Build Multi-Platform Binaries
+      - name: Build Multi-Platform Binaries to release/
         run: |
-          mkdir -p dist
+          mkdir -p release
 
-          # Windows (amd64) - Main portable exe
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/portable-ssh-ftp.exe .
+          # Windows (amd64) - Main portable exe (Standalone app window, no console)
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H=windowsgui" -o release/portable-ssh-ftp.exe .
+
+          # Windows (amd64) - Debug console version
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o release/portable-ssh-ftp-console.exe .
 
           # macOS (Apple Silicon arm64)
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/portable-ssh-ftp-darwin-arm64 .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o release/portable-ssh-ftp-darwin-arm64 .
 
           # macOS (Intel amd64)
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/portable-ssh-ftp-darwin-amd64 .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o release/portable-ssh-ftp-darwin-amd64 .
 
           # Linux (amd64)
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/portable-ssh-ftp-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o release/portable-ssh-ftp-linux-amd64 .
+
+      - name: Upload Release Binaries Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: release/
 
       - name: Create GitHub Release and Upload Assets
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag_name != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
@@ -62,7 +74,8 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            dist/portable-ssh-ftp.exe
-            dist/portable-ssh-ftp-darwin-arm64
-            dist/portable-ssh-ftp-darwin-amd64
-            dist/portable-ssh-ftp-linux-amd64
+            release/portable-ssh-ftp.exe
+            release/portable-ssh-ftp-console.exe
+            release/portable-ssh-ftp-darwin-arm64
+            release/portable-ssh-ftp-darwin-amd64
+            release/portable-ssh-ftp-linux-amd64

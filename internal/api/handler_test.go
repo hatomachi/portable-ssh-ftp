@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"portable-ssh-ftp/internal/config"
+	"portable-ssh-ftp/internal/lifecycle"
 	"portable-ssh-ftp/internal/session"
 )
 
@@ -195,6 +197,40 @@ func TestAPI_SSHDownload_Validation(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 status for missing session, got %d", w.Code)
+	}
+}
+
+func TestAPI_Lifecycle(t *testing.T) {
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+	lifeMgr := lifecycle.NewManager(true, 5*time.Second)
+	api.SetLifecycleManager(lifeMgr)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	// POST /api/heartbeat -> 200
+	req := httptest.NewRequest(http.MethodPost, "/api/heartbeat", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for heartbeat, got %d", w.Code)
+	}
+
+	// POST /api/shutdown-beacon -> 200
+	req = httptest.NewRequest(http.MethodPost, "/api/shutdown-beacon", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for shutdown-beacon, got %d", w.Code)
+	}
+
+	// POST /api/shutdown -> 200
+	req = httptest.NewRequest(http.MethodPost, "/api/shutdown", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for shutdown, got %d", w.Code)
 	}
 }
 

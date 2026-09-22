@@ -224,4 +224,20 @@ export async function deleteProfile(id: string): Promise<void> {
   }
 }
 
+export async function sendHeartbeat(): Promise<void> {
+  await fetch(`${API_BASE}/heartbeat`, { method: 'POST' }).catch(() => {});
+}
+
+export function sendShutdownBeacon(): void {
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(`${API_BASE}/shutdown-beacon`);
+  } else {
+    fetch(`${API_BASE}/shutdown-beacon`, { method: 'POST', keepalive: true }).catch(() => {});
+  }
+}
+
+export async function requestShutdown(): Promise<void> {
+  await fetch(`${API_BASE}/shutdown`, { method: 'POST' }).catch(() => {});
+}
+
 

@@ -5,7 +5,8 @@ import {
   Columns, 
   Plug, 
   Unplug, 
-  ShieldCheck 
+  ShieldCheck,
+  Power
 } from 'lucide-react';
 import type { SessionStatus } from '../types';
 
@@ -15,6 +16,7 @@ interface HeaderProps {
   onLayoutChange: (layout: 'split' | 'terminal' | 'explorer') => void;
   onOpenConnect: () => void;
   onDisconnect: () => void;
+  onQuit: () => void;
   isConnecting: boolean;
 }
 
@@ -24,6 +26,7 @@ export const Header: React.FC<HeaderProps> = ({
   onLayoutChange,
   onOpenConnect,
   onDisconnect,
+  onQuit,
   isConnecting,
 }) => {
   return (
@@ -130,6 +133,17 @@ export const Header: React.FC<HeaderProps> = ({
             <span>{isConnecting ? '接続中...' : '接続設定'}</span>
           </button>
         )}
+
+        {/* Quit Application Button */}
+        <div className="pl-1.5 border-l border-slate-800 ml-1">
+          <button
+            onClick={onQuit}
+            title="アプリケーションを終了 (サーバー停止)"
+            className="p-1.5 rounded text-xs text-slate-400 hover:text-red-400 hover:bg-red-950/40 border border-transparent hover:border-red-900/40 transition-colors"
+          >
+            <Power className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </header>
   );

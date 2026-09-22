@@ -7,10 +7,15 @@ build:
 	cd frontend && npm run build
 	go build -ldflags="-s -w" -o bin/$(APP_NAME) .
 
-# Windows向けポータブル単一exeのクロスコンパイル（Mac上で実行可能）
+# Windows向けポータブル単一exeのクロスコンパイル（独立アプリ・黒画面なし）
 build-windows:
 	cd frontend && npm run build
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o bin/$(APP_NAME).exe .
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H=windowsgui" -o bin/$(APP_NAME).exe .
+
+# Windows向けデバッグ用（コンソール画面あり）
+build-windows-console:
+	cd frontend && npm run build
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o bin/$(APP_NAME)-console.exe .
 
 # 開発用（バックエンド）
 dev-backend:

@@ -6,7 +6,8 @@ import { Terminal } from './components/Terminal';
 import { RemoteExplorer } from './components/RemoteExplorer';
 import type { SessionStatus, ConnectRequest, SessionTab } from './types';
 import { connectSession, disconnectSession, duplicateSession, listSessions } from './api/client';
-import { Terminal as TerminalIcon, FolderTree, Plug, Shield } from 'lucide-react';
+import { initLifecycle, exitApplication } from './utils/lifecycle';
+import { Terminal as TerminalIcon, FolderTree, Plug, Shield, Power, AlertTriangle } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [tabs, setTabs] = useState<SessionTab[]>([]);
@@ -14,6 +15,14 @@ export const App: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isDuplicating, setIsDuplicating] = useState(false);
+  const [isQuitModalOpen, setIsQuitModalOpen] = useState(false);
+  const [isTerminated, setIsTerminated] = useState(false);
+
+  // Initialize lifecycle (heartbeat & auto-shutdown)
+  useEffect(() => {
+    const cleanup = initLifecycle();
+    return cleanup;
+  }, []);
 
   // Check current backend status on mount
   useEffect(() => {
@@ -172,7 +181,34 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleQuitApp = async () => {
+    setIsQuitModalOpen(false);
+    setIsTerminated(true);
+    await exitApplication();
+  };
+
   const hasTabs = tabs.length > 0;
+
+  if (isTerminated) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen w-screen bg-slate-950 text-slate-100 font-sans p-6 text-center select-none">
+        <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-4 text-slate-400">
+          <Power className="w-8 h-8" />
+        </div>
+        <h1 className="text-xl font-bold text-slate-200 mb-2">Portable SSH &amp; FTP は終了しました</h1>
+        <p className="text-sm text-slate-400 max-w-sm mb-6">
+          バックエンドプロセスを停止しました。<br />
+          このウィンドウまたはタブを閉じてください。
+        </p>
+        <button
+          onClick={() => window.close()}
+          className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors"
+        >
+          ウィンドウを閉じる
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
@@ -182,6 +218,7 @@ export const App: React.FC = () => {
         onLayoutChange={handleLayoutChange}
         onOpenConnect={() => setIsModalOpen(true)}
         onDisconnect={handleDisconnectCurrent}
+        onQuit={() => setIsQuitModalOpen(true)}
         isConnecting={isConnecting}
       />
 
@@ -302,8 +339,46 @@ export const App: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onConnect={handleConnect}
       />
+
+      {/* Quit Confirmation Dialog */}
+      {isQuitModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl max-w-sm w-full p-5 space-y-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-red-950/60 rounded-lg border border-red-800/40 text-red-400">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-100 text-sm">アプリケーションの終了</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Portable SSH &amp; FTP を終了しますか？</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 bg-slate-800/50 p-3 rounded-lg border border-slate-700/50 leading-relaxed">
+              バックエンドプロセス（Go）を停止し、すべてのSSH/FTP接続を切断します。
+            </p>
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                onClick={() => setIsQuitModalOpen(false)}
+                className="px-3 py-1.5 rounded text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleQuitApp}
+                className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded text-xs font-medium bg-red-600 hover:bg-red-500 text-white shadow-sm transition-colors"
+              >
+                <Power className="w-3.5 h-3.5" />
+                <span>終了する</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
 
 export default App;

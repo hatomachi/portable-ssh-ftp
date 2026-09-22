@@ -8,14 +8,14 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
 
 	"portable-ssh-ftp/internal/api"
+	"portable-ssh-ftp/internal/browser"
 	"portable-ssh-ftp/internal/config"
+	"portable-ssh-ftp/internal/lifecycle"
 	"portable-ssh-ftp/internal/session"
 	"portable-ssh-ftp/internal/terminal"
 	"portable-ssh-ftp/internal/web"
@@ -24,6 +24,8 @@ import (
 func main() {
 	port := flag.Int("port", 8080, "Port to listen on")
 	noBrowser := flag.Bool("no-browser", false, "Do not open browser automatically")
+	appMode := flag.Bool("app", true, "Open in standalone application window mode (Edge/Chrome)")
+	noAutoclose := flag.Bool("no-autoclose", false, "Disable auto-shutdown when browser window is closed")
 	flag.Parse()
 
 	// Find available port if default is occupied
@@ -36,6 +38,14 @@ func main() {
 	profileStore := config.NewProfileStore("")
 	apiHandler := api.NewAPI(sessionMgr, profileStore)
 	termHandler := terminal.NewHandler(sessionMgr)
+
+	// Lifecycle & Auto-Shutdown management
+	lifecycleMgr := lifecycle.NewManager(!*noAutoclose, 6*time.Second)
+	apiHandler.SetLifecycleManager(lifecycleMgr)
+
+	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
+	defer cancelMonitor()
+	lifecycleMgr.StartMonitoring(monitorCtx)
 
 	staticFS, err := getStaticFS()
 	if err != nil {
@@ -71,7 +81,9 @@ func main() {
 	if !*noBrowser {
 		go func() {
 			time.Sleep(200 * time.Millisecond)
-			_ = openBrowser(appURL)
+			if err := browser.Open(appURL, *appMode); err != nil {
+				log.Printf("[Browser] Failed to open browser: %v\n", err)
+			}
 		}()
 	}
 
@@ -85,8 +97,12 @@ func main() {
 		}
 	}()
 
-	<-stop
-	fmt.Println("\nShutting down server...")
+	select {
+	case sig := <-stop:
+		fmt.Printf("\nReceived signal %v, shutting down server...\n", sig)
+	case <-lifecycleMgr.ShutdownChan():
+		fmt.Println("\nBrowser window closed or shutdown requested. Shutting down server...")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -120,23 +136,4 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-func openBrowser(url string) error {
-	var cmd string
-	var args []string
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "rundll32"
-		args = []string{"url.dll,FileProtocolHandler", url}
-	case "darwin":
-		cmd = "open"
-		args = []string{url}
-	default:
-		cmd = "xdg-open"
-		args = []string{url}
-	}
-
-	return exec.Command(cmd, args...).Start()
 }

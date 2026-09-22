@@ -10,8 +10,10 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"portable-ssh-ftp/internal/config"
+	"portable-ssh-ftp/internal/lifecycle"
 	"portable-ssh-ftp/internal/logger"
 	"portable-ssh-ftp/internal/session"
 )
@@ -19,6 +21,7 @@ import (
 type API struct {
 	mgr          *session.Manager
 	profileStore *config.ProfileStore
+	lifecycleMgr *lifecycle.Manager
 }
 
 func NewAPI(mgr *session.Manager, profileStore *config.ProfileStore) *API {
@@ -26,6 +29,10 @@ func NewAPI(mgr *session.Manager, profileStore *config.ProfileStore) *API {
 		profileStore = config.NewProfileStore("")
 	}
 	return &API{mgr: mgr, profileStore: profileStore}
+}
+
+func (a *API) SetLifecycleManager(lm *lifecycle.Manager) {
+	a.lifecycleMgr = lm
 }
 
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
@@ -62,6 +69,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/profiles", a.handleSaveProfile)
 	mux.HandleFunc("DELETE /api/profiles", a.handleDeleteProfile)
 	mux.HandleFunc("DELETE /api/profiles/{id}", a.handleDeleteProfile)
+
+	// Lifecycle & Auto-Shutdown
+	mux.HandleFunc("/api/heartbeat", a.handleHeartbeat)
+	mux.HandleFunc("/api/shutdown-beacon", a.handleShutdownBeacon)
+	mux.HandleFunc("/api/shutdown", a.handleShutdown)
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -714,6 +726,34 @@ func (a *API) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (a *API) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if a.lifecycleMgr != nil {
+		a.lifecycleMgr.RecordHeartbeat()
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (a *API) handleShutdownBeacon(w http.ResponseWriter, r *http.Request) {
+	if a.lifecycleMgr != nil {
+		a.lifecycleMgr.FastShutdownNotice()
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (a *API) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if a.lifecycleMgr != nil {
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			a.lifecycleMgr.TriggerShutdown()
+		}()
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"status": "shutting_down"})
 }
 
 
