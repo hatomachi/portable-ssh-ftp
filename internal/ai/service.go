@@ -26,7 +26,34 @@ var (
 		regexp.MustCompile(`(?i)\bkill\s+-9\s+-1\b`),
 		regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?777\s+/`),
 	}
+
+	// Forbidden operators and metacharacters for autonomous execution
+	forbiddenSymbolsRegex = regexp.MustCompile("[|><;&`$]")
+
+	// Sensitive paths and keywords prohibited from autonomous read
+	sensitiveKeywords = []string{
+		"shadow", "passwd", "id_rsa", "id_ed25519", "id_dsa", "id_ecdsa",
+		".pem", ".key", "credentials", ".env",
+	}
+
+	// Allowed read-only base commands
+	allowedCommands = map[string]bool{
+		"ls":      true,
+		"cat":     true,
+		"head":    true,
+		"tail":    true,
+		"grep":    true,
+		"which":   true,
+		"uname":   true,
+		"command": true,
+	}
 )
+
+// RemoteExecutor executes commands on a remote host (e.g. via SSH).
+type RemoteExecutor interface {
+	RunCommandWithLimit(ctx context.Context, cmd string, maxBytes int64) (string, error)
+}
+
 
 type Service struct {
 	customCmdPath string
@@ -132,25 +159,165 @@ func (s *Service) CheckStatus(ctx context.Context) StatusResponse {
 	}
 }
 
-// ExecuteChat runs claude -p with context and prompt.
-func (s *Service) ExecuteChat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	cmdPath, err := s.FindClaudeCommand()
-	if err != nil {
-		return nil, fmt.Errorf("claude CLI is not available: %w", err)
+// ValidateSafeCommand checks whether a command is strictly safe and read-only.
+func ValidateSafeCommand(cmd string) error {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return fmt.Errorf("command is empty")
 	}
 
-	fullPrompt := s.buildPrompt(req)
+	if len(trimmed) > 300 {
+		return fmt.Errorf("command is too long (max 300 characters)")
+	}
 
-	// Execute with timeout (up to 90 seconds)
-	execCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Check for newlines
+	if strings.ContainsAny(trimmed, "\n\r") {
+		return fmt.Errorf("multiline commands or embedded newlines are prohibited")
+	}
+
+	// Check forbidden operators (pipes, redirects, backticks, $, ;, &&, ||)
+	if forbiddenSymbolsRegex.MatchString(trimmed) {
+		return fmt.Errorf("prohibited operator or metacharacter detected (| > < ; & ` $)")
+	}
+
+	lower := strings.ToLower(trimmed)
+
+	// Check for sensitive keywords
+	for _, kw := range sensitiveKeywords {
+		if strings.Contains(lower, kw) {
+			return fmt.Errorf("access to sensitive credential or password file (%s) is prohibited", kw)
+		}
+	}
+
+	// Tokenize command by whitespace
+	tokens := strings.Fields(trimmed)
+	if len(tokens) == 0 {
+		return fmt.Errorf("invalid command")
+	}
+
+	baseCmd := filepath.Base(tokens[0])
+	if !allowedCommands[baseCmd] {
+		return fmt.Errorf("command '%s' is not in the read-only whitelist (allowed: ls, cat, head, tail, grep, which, uname, command)", baseCmd)
+	}
+
+	// Specific checks per command
+	switch baseCmd {
+	case "cat":
+		// cat without arguments blocks waiting for stdin
+		if len(tokens) < 2 {
+			return fmt.Errorf("cat requires at least one target file argument")
+		}
+		for _, arg := range tokens[1:] {
+			if strings.HasPrefix(arg, "-") && arg != "-n" && arg != "-b" && arg != "-s" && arg != "-v" && arg != "-E" && arg != "-T" && arg != "-A" {
+				return fmt.Errorf("unsupported or suspicious flag for cat: %s", arg)
+			}
+		}
+	case "command":
+		if len(tokens) < 3 || tokens[1] != "-v" {
+			return fmt.Errorf("only 'command -v <tool>' is allowed")
+		}
+	case "grep":
+		// grep requires pattern and file
+		if len(tokens) < 3 {
+			return fmt.Errorf("grep requires pattern and file arguments")
+		}
+	case "which":
+		if len(tokens) < 2 {
+			return fmt.Errorf("which requires at least one target tool argument")
+		}
+	case "head", "tail":
+		// must specify at least one file or option + file
+		hasFile := false
+		for i := 1; i < len(tokens); i++ {
+			if !strings.HasPrefix(tokens[i], "-") {
+				// check if previous token was -n or -c
+				if i > 1 && (tokens[i-1] == "-n" || tokens[i-1] == "-c") {
+					continue
+				}
+				hasFile = true
+				break
+			}
+		}
+		if !hasFile {
+			return fmt.Errorf("%s requires a target file argument", baseCmd)
+		}
+	case "sudo", "su":
+		return fmt.Errorf("root privilege escalation commands are strictly prohibited")
+	}
+
+	return nil
+}
+
+// parseInspectCommands extracts up to 2 read-only commands proposed by Claude.
+func parseInspectCommands(reply string) []string {
+	var commands []string
+	lines := strings.Split(reply, "\n")
+	inInspectBlock := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "```") {
+			continue
+		}
+
+		if strings.EqualFold(trimmed, "NONE") {
+			return nil
+		}
+
+		if strings.HasPrefix(strings.ToUpper(trimmed), "INSPECT:") {
+			inInspectBlock = true
+			rest := strings.TrimSpace(trimmed[len("INSPECT:"):])
+			if rest != "" {
+				commands = append(commands, rest)
+			}
+			continue
+		}
+
+		if inInspectBlock {
+			// Stop if another section or markdown header starts
+			if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "【") {
+				break
+			}
+			// Clean list prefixes like "- " or "1. "
+			cmd := trimmed
+			if strings.HasPrefix(cmd, "- ") || strings.HasPrefix(cmd, "* ") {
+				cmd = strings.TrimSpace(cmd[2:])
+			} else if idx := strings.Index(cmd, ". "); idx > 0 && idx <= 3 {
+				cmd = strings.TrimSpace(cmd[idx+2:])
+			}
+			// Strip inline backticks `ls -la`
+			cmd = strings.Trim(cmd, "`")
+			if cmd != "" {
+				commands = append(commands, cmd)
+			}
+		}
+	}
+
+	// Limit to at most 2 commands
+	if len(commands) > 2 {
+		commands = commands[:2]
+	}
+	return commands
+}
+
+func (s *Service) runClaudeCLI(ctx context.Context, prompt string, timeout time.Duration) (string, error) {
+	cmdPath, err := s.FindClaudeCommand()
+	if err != nil {
+		return "", fmt.Errorf("claude CLI is not available: %w", err)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var cmd *exec.Cmd
-	// On Windows, if calling a .cmd or .bat file, invoke via cmd.exe /C if needed
 	if runtime.GOOS == "windows" && (strings.HasSuffix(strings.ToLower(cmdPath), ".cmd") || strings.HasSuffix(strings.ToLower(cmdPath), ".bat")) {
-		cmd = exec.CommandContext(execCtx, "cmd.exe", "/c", cmdPath, "-p", fullPrompt)
+		cmd = exec.CommandContext(execCtx, "cmd.exe", "/c", cmdPath, "-p", prompt)
 	} else {
-		cmd = exec.CommandContext(execCtx, cmdPath, "-p", fullPrompt)
+		cmd = exec.CommandContext(execCtx, cmdPath, "-p", prompt)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -163,32 +330,138 @@ func (s *Service) ExecuteChat(ctx context.Context, req ChatRequest) (*ChatRespon
 			errOutput = strings.TrimSpace(stdout.String())
 		}
 		if execCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("Claude CLIの実行がタイムアウトしました (90秒)")
+			return "", fmt.Errorf("Claude CLIの実行がタイムアウトしました (%v)", timeout)
 		}
-		return nil, fmt.Errorf("Claude CLIの実行に失敗しました: %v (%s)", err, errOutput)
+		return "", fmt.Errorf("Claude CLIの実行に失敗しました: %v (%s)", err, errOutput)
 	}
 
-	reply := stdout.String()
-	commands := s.extractCommands(reply)
+	return stdout.String(), nil
+}
 
+func (s *Service) buildInspectPlanPrompt(req ChatRequest) string {
+	var sb strings.Builder
+
+	sb.WriteString("【役割】\n")
+	sb.WriteString("あなたはLinux/Unixシステムの障害調査・構成確認のエキスパートです。\n")
+	sb.WriteString("ユーザーの依頼を達成するために、もし事前にサーバー上で確認しておくべき設定ファイルやディレクトリ、バージョン情報などがあれば、読み取り専用の安全なコマンドを提案してください。\n\n")
+
+	sb.WriteString("【厳格な安全規則】\n")
+	sb.WriteString("実行可能なコマンドは以下に限定されます:\n")
+	sb.WriteString("- ls (例: ls -la /var/log/nginx)\n")
+	sb.WriteString("- cat (例: cat /etc/nginx/nginx.conf)\n")
+	sb.WriteString("- head / tail (例: tail -n 20 /var/log/messages)\n")
+	sb.WriteString("- grep (例: grep -i 'listen' /etc/nginx/nginx.conf)\n")
+	sb.WriteString("- which / command -v (例: which nginx)\n")
+	sb.WriteString("- uname (例: uname -a)\n")
+	sb.WriteString("※ パイプ(|)、リダイレクト(>)、sudo、機密ファイル(passwd, shadow, id_rsa, .env等)は絶対に使用禁止です。\n\n")
+
+	sb.WriteString("【出力フォーマット】\n")
+	sb.WriteString("調査が必要な場合は、最大2件のコマンドを以下の書式でのみ出力してください:\n")
+	sb.WriteString("INSPECT:\n")
+	sb.WriteString("ls -la /var/log/nginx\n")
+	sb.WriteString("cat /etc/nginx/nginx.conf\n\n")
+	sb.WriteString("※もし現在の情報で十分な場合、または概念質問・仕組みの質問で実機調査が一切不要な場合は、以下のように1行だけ出力してください:\n")
+	sb.WriteString("NONE\n\n")
+
+	c := req.Context
+	if c.Host != "" {
+		sb.WriteString(fmt.Sprintf("接続先: %s (user: %s)\n", c.Host, c.User))
+	}
+	if c.CurrentDir != "" {
+		sb.WriteString(fmt.Sprintf("カレントパス: %s\n", c.CurrentDir))
+	}
+	if len(c.Files) > 0 {
+		sb.WriteString(fmt.Sprintf("カレントファイル件数: %d件\n", len(c.Files)))
+	}
+
+	sb.WriteString("\n【ユーザーの指示】\n")
+	sb.WriteString(req.Prompt)
+
+	return sb.String()
+}
+
+// InspectAndChat executes the 3-phase autonomous inspection and chat pipeline.
+func (s *Service) InspectAndChat(ctx context.Context, req ChatRequest, executor RemoteExecutor) (*ChatResponse, error) {
+	var inspectLogs []InspectLog
+
+	// Only run inspection if AutoInspect is requested and executor is present
+	if req.AutoInspect && executor != nil {
+		// Phase 1: Planning
+		planPrompt := s.buildInspectPlanPrompt(req)
+		planReply, err := s.runClaudeCLI(ctx, planPrompt, 30*time.Second)
+		if err == nil {
+			commands := parseInspectCommands(planReply)
+			for _, cmd := range commands {
+				startTime := time.Now()
+				// Phase 2: Safe guard validation
+				valErr := ValidateSafeCommand(cmd)
+				if valErr != nil {
+					inspectLogs = append(inspectLogs, InspectLog{
+						Command: cmd,
+						Error:   valErr.Error(),
+						Blocked: true,
+					})
+					continue
+				}
+
+				// Execute on remote host with 5-second timeout and 16KB limit
+				execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				out, runErr := executor.RunCommandWithLimit(execCtx, cmd, 16*1024)
+				cancel()
+
+				durStr := fmt.Sprintf("%dms", time.Since(startTime).Milliseconds())
+				logItem := InspectLog{
+					Command:  cmd,
+					Output:   strings.TrimSpace(out),
+					Duration: durStr,
+					Blocked:  false,
+				}
+				if runErr != nil {
+					logItem.Error = runErr.Error()
+				}
+				inspectLogs = append(inspectLogs, logItem)
+			}
+		}
+	}
+
+	// Phase 3: Final Response Generation
+	finalPrompt := s.buildPromptWithLogs(req, inspectLogs)
+	finalReply, err := s.runClaudeCLI(ctx, finalPrompt, 90*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	commands := s.extractCommands(finalReply)
 	return &ChatResponse{
-		Reply:    reply,
-		Commands: commands,
+		Reply:       finalReply,
+		Commands:    commands,
+		InspectLogs: inspectLogs,
 	}, nil
 }
 
+// ExecuteChat runs claude -p with context and prompt (backward-compatible).
+func (s *Service) ExecuteChat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	return s.InspectAndChat(ctx, req, nil)
+}
+
 func (s *Service) buildPrompt(req ChatRequest) string {
+	return s.buildPromptWithLogs(req, nil)
+}
+
+func (s *Service) buildPromptWithLogs(req ChatRequest, inspectLogs []InspectLog) string {
 	var sb strings.Builder
 
 	sb.WriteString("【役割】\n")
 	sb.WriteString("あなたはSSH/ターミナル操作およびLinux/Unix本番保守の高度なアシスタントです。\n")
-	sb.WriteString("ユーザーから提供されたホスト情報、カレントディレクトリ、ファイル一覧、直近のターミナル出力（エラーやログ）を参考に、ユーザーの要望を満たす安全で最適なコマンドスニペットを提案してください。\n\n")
+	sb.WriteString("ユーザーから提供されたホスト情報、カレントディレクトリ、ファイル一覧、直近のターミナル出力、および自律環境調査結果を参考に、ユーザーの要望を満たす安全で最適なコマンドや解説を提案してください。\n\n")
 
 	sb.WriteString("【指示ルール】\n")
-	sb.WriteString("1. 実行すべきコマンドは必ず ```bash ... ``` コードブロックで提示してください。\n")
-	sb.WriteString("2. ユーザーが変更・指定すべき値（IPアドレス、ファイル名、数値等）がある場合は、{{PARAM_NAME}} の形式（例: {{TARGET_IP}}, {{PORT}}, {{KEYWORD}}）でプレースホルダにしてください。ツールのセーフティ・コマンドバーで自動入力フォームが展開されます。\n")
-	sb.WriteString("3. 本番環境での誤爆を防ぐため、rm -rf などの破壊的コマンドは極力避け、確認用（ls, cat, grep, head, status等）の安全なコマンドを優先してください。危険な操作を行う場合は必ず事前に警告を添えてください。\n")
-	sb.WriteString("4. コマンドの前後に、なぜそのコマンドを実行するのか、何を確認できるかの簡潔な解説を添えてください。\n\n")
+	sb.WriteString("1. ユーザーが操作・調査・実行コマンドを求めている場合は、最適なコマンドを ```bash ... ``` コードブロックで提示してください。\n")
+	sb.WriteString("2. ユーザーが概念の解説、仕組みの質問、トラブルの考察、壁打ちや相談を行っている場合は、無理にコマンドブロックを作成せず、通常の親切なMarkdownテキストで回答してください。\n")
+	sb.WriteString("3. 設定ファイル（nginx.conf, yaml, json等）の例を提示する場合は、それぞれの言語名（```nginx, ```yaml）を使用してください（コマンドバーには送られません）。\n")
+	sb.WriteString("4. 実行コマンドの中で、ユーザーが変更・指定すべき値（IPアドレス、ファイル名、数値等）がある場合は、{{PARAM_NAME}} の形式（例: {{TARGET_IP}}, {{PORT}}, {{KEYWORD}}）でプレースホルダにしてください。ツールのセーフティ・コマンドバーで自動入力フォームが展開されます。\n")
+	sb.WriteString("5. 本番環境での誤爆を防ぐため、rm -rf などの破壊的コマンドは極力避け、確認用（ls, cat, grep, head, status等）の安全なコマンドを優先してください。危険な操作を行う場合は必ず事前に警告を添えてください。\n")
+	sb.WriteString("6. コマンドの前後に、なぜそのコマンドを実行するのか、何を確認できるかの簡潔な解説を添えてください。\n\n")
 
 	c := req.Context
 	sb.WriteString("【現在のセッションコンテキスト（ユーザーに見えている画面情報）】\n")
@@ -246,6 +519,19 @@ func (s *Service) buildPrompt(req ChatRequest) string {
 			}
 			sb.WriteString(fmt.Sprintf("[%s]: %s\n", role, content))
 		}
+	}
+
+	// Inject autonomous inspection results if any
+	if len(inspectLogs) > 0 {
+		sb.WriteString("\n【AI自律環境調査の結果（裏SSHで安全に取得した実環境データ）】\n")
+		for _, log := range inspectLogs {
+			if log.Blocked {
+				sb.WriteString(fmt.Sprintf("- コマンド: %s (安全ガードレールによりブロック: %s)\n", log.Command, log.Error))
+			} else {
+				sb.WriteString(fmt.Sprintf("- 実行コマンド: %s\n  出力:\n  ```\n  %s\n  ```\n", log.Command, log.Output))
+			}
+		}
+		sb.WriteString("※ 上記の実環境データと実体に基づき、ユーザーの要望を満たす確実で最適なコマンドや解説を作成してください。\n")
 	}
 
 	sb.WriteString("\n【ユーザーの指示】\n")

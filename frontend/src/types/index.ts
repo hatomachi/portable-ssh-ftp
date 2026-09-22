@@ -185,11 +185,20 @@ export interface AICommandSnippet {
   isDangerous: boolean;
 }
 
+export interface AIInspectLog {
+  command: string;
+  output: string;
+  error?: string;
+  duration?: string;
+  blocked?: boolean;
+}
+
 export interface AIChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   commands?: AICommandSnippet[];
+  inspectLogs?: AIInspectLog[];
   timestamp: number;
 }
 
@@ -208,11 +217,13 @@ export interface AIChatRequest {
   prompt: string;
   context: AIChatContext;
   model?: string;
+  autoInspect?: boolean;
 }
 
 export interface AIChatResponse {
   reply: string;
   commands: AICommandSnippet[];
+  inspectLogs?: AIInspectLog[];
 }
 
 

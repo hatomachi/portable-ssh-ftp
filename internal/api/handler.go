@@ -984,7 +984,14 @@ func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := a.aiSvc.ExecuteChat(r.Context(), req)
+	var executor ai.RemoteExecutor
+	if req.AutoInspect && req.Context.SessionID != "" && a.mgr != nil {
+		if sess, ok := a.mgr.GetSession(req.Context.SessionID); ok && sess.SSHClient != nil {
+			executor = sess.SSHClient
+		}
+	}
+
+	res, err := a.aiSvc.InspectAndChat(r.Context(), req, executor)
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return

@@ -31,9 +31,10 @@ type ChatMessage struct {
 }
 
 type ChatRequest struct {
-	Prompt  string      `json:"prompt"`
-	Context ChatContext `json:"context"`
-	Model   string      `json:"model,omitempty"`
+	Prompt      string      `json:"prompt"`
+	Context     ChatContext `json:"context"`
+	Model       string      `json:"model,omitempty"`
+	AutoInspect bool        `json:"autoInspect"`
 }
 
 type CommandSnippet struct {
@@ -42,7 +43,18 @@ type CommandSnippet struct {
 	IsDangerous bool   `json:"isDangerous"`
 }
 
-type ChatResponse struct {
-	Reply    string           `json:"reply"`
-	Commands []CommandSnippet `json:"commands"`
+// InspectLog records the safe inspection command execution result.
+type InspectLog struct {
+	Command  string `json:"command"`
+	Output   string `json:"output"`
+	Error    string `json:"error,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Blocked  bool   `json:"blocked,omitempty"`
 }
+
+type ChatResponse struct {
+	Reply       string           `json:"reply"`
+	Commands    []CommandSnippet `json:"commands"`
+	InspectLogs []InspectLog     `json:"inspectLogs,omitempty"`
+}
+

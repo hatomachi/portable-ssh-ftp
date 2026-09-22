@@ -16,8 +16,11 @@ import {
   ShieldCheck,
   Cpu,
   Trash2,
+  Search,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
-import type { AIChatMessage, AIStatusResponse, SessionStatus } from '../types';
+import type { AIChatMessage, AIInspectLog, AIStatusResponse, SessionStatus } from '../types';
 import { getAIStatus, askAIChat } from '../api/client';
 import { getSessionAiContext } from '../utils/aiContextManager';
 
@@ -34,9 +37,68 @@ const QUICK_PROMPTS = [
   { label: '📁 カレント調査', prompt: 'カレントディレクトリのファイル一覧を確認し、構成の概要と次に調べるべき推奨コマンドを教えて。' },
   { label: '🔍 巨大ファイルTop10', prompt: 'カレントディレクトリ配下で容量を圧迫しているファイルやディレクトリを上位10件見つける安全なコマンドを作って。' },
   { label: '⚠️ 直前エラー解説', prompt: '直前のターミナル出力に出ているエラーの原因を解説し、復旧・確認するためのコマンドを提示して。' },
+  { label: '💡 概念: cron vs timer', prompt: 'Linuxのcronとsystemdタイマーの仕組みの違いや、どちらを使うべきかの判断基準を教えて。' },
   { label: '📊 サーバー負荷確認', prompt: 'CPU、メモリ、ディスク使用量、および高負荷プロセスを確認するコマンドを提示して。' },
   { label: '🔌 ポート・通信調査', prompt: 'LISTENしているポートと、特定のポートを使っているプロセスを調査するコマンドを作って。' },
 ];
+
+const InspectLogAccordion: React.FC<{ logs: AIInspectLog[] }> = ({ logs }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  if (!logs || logs.length === 0) return null;
+
+  const blockedCount = logs.filter((l) => l.blocked).length;
+
+  return (
+    <div className="mb-2.5 rounded-lg border border-slate-700/80 bg-slate-950/70 overflow-hidden text-xs">
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-2.5 py-1.5 flex items-center justify-between text-left hover:bg-slate-800/60 transition-colors cursor-pointer select-none"
+      >
+        <div className="flex items-center space-x-1.5 text-sky-400 font-medium text-[11px]">
+          <Search className="w-3.5 h-3.5 shrink-0" />
+          <span>{logs.length}件の自律環境調査を実行しました</span>
+          {blockedCount > 0 && (
+            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-950/80 border border-amber-800 text-amber-300">
+              {blockedCount}件ブロック
+            </span>
+          )}
+        </div>
+        <div className="text-slate-400">
+          {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="p-2 space-y-2 border-t border-slate-800 bg-slate-950 text-[11px]">
+          {logs.map((log, idx) => (
+            <div key={idx} className="rounded border border-slate-800 bg-slate-900/80 p-2 space-y-1">
+              <div className="flex items-center justify-between font-mono text-[10px]">
+                <span className="text-sky-300 font-semibold truncate">$ {log.command}</span>
+                {log.duration && <span className="text-slate-500 shrink-0 ml-2">{log.duration}</span>}
+              </div>
+
+              {log.blocked ? (
+                <div className="flex items-start space-x-1 text-amber-300 text-[10px] bg-amber-950/50 p-1.5 rounded border border-amber-800/60">
+                  <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5 text-amber-400" />
+                  <span>安全ガードレールによりブロック: {log.error}</span>
+                </div>
+              ) : log.error ? (
+                <div className="text-rose-300 text-[10px] bg-rose-950/50 p-1.5 rounded border border-rose-800/60">
+                  エラー: {log.error}
+                </div>
+              ) : (
+                <pre className="p-1.5 rounded bg-slate-950 text-slate-300 font-mono text-[10px] max-h-32 overflow-y-auto whitespace-pre-wrap leading-tight">
+                  {log.output || '(出力なし)'}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   sessionId,
@@ -50,9 +112,12 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [includeContext, setIncludeContext] = useState(true);
+  const [autoInspect, setAutoInspect] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [sentToBarId, setSentToBarId] = useState<string | null>(null);
   const [executedId, setExecutedId] = useState<string | null>(null);
+
+  const isSshAvailable = Boolean(sessionStatus?.sshConnected);
 
   // Live context preview
   const [currentContext, setCurrentContext] = useState<{
@@ -193,6 +258,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
       const res = await askAIChat({
         prompt: promptToSend,
         context: aiContext,
+        autoInspect: autoInspect && isSshAvailable,
       });
 
       const assistantMessage: AIChatMessage = {
@@ -200,6 +266,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         role: 'assistant',
         content: res.reply,
         commands: res.commands || [],
+        inspectLogs: res.inspectLogs || [],
         timestamp: Date.now(),
       };
 
@@ -317,15 +384,36 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             <Cpu className="w-3 h-3 text-sky-400" />
             <span>自動注入コンテキスト (画面連動)</span>
           </span>
-          <label className="flex items-center space-x-1 text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={includeContext}
-              onChange={(e) => setIncludeContext(e.target.checked)}
-              className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3 h-3"
-            />
-            <span>コンテキストを含める</span>
-          </label>
+          <div className="flex items-center space-x-3">
+            <label
+              title={isSshAvailable ? '安全な読み取りコマンド(ls, cat等)で裏SSH自律調査を行います' : 'SSH接続時のみ利用可能です'}
+              className={`flex items-center space-x-1 text-[10px] ${
+                isSshAvailable ? 'text-sky-300 hover:text-sky-200 cursor-pointer' : 'text-slate-600 cursor-not-allowed'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={autoInspect && isSshAvailable}
+                disabled={!isSshAvailable}
+                onChange={(e) => setAutoInspect(e.target.checked)}
+                className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3 h-3 disabled:opacity-30"
+              />
+              <span className="flex items-center space-x-0.5">
+                <Search className="w-3 h-3 text-sky-400" />
+                <span>自律環境調査</span>
+              </span>
+            </label>
+
+            <label className="flex items-center space-x-1 text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeContext}
+                onChange={(e) => setIncludeContext(e.target.checked)}
+                className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3 h-3"
+              />
+              <span>コンテキスト</span>
+            </label>
+          </div>
         </div>
 
         {includeContext && (
@@ -444,6 +532,10 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                     : 'bg-slate-800/80 text-slate-200 border border-slate-700/60 rounded-tl-xs'
                 }`}
               >
+                {!isUser && msg.inspectLogs && msg.inspectLogs.length > 0 && (
+                  <InspectLogAccordion logs={msg.inspectLogs} />
+                )}
+
                 {msg.content}
 
                 {/* Commands extracted from assistant response */}
@@ -525,7 +617,11 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         {isLoading && (
           <div className="flex items-center space-x-2 text-slate-400 p-2">
             <Loader2 className="w-4 h-4 animate-spin text-sky-400" />
-            <span className="text-[11px]">Claude CLI (claude -p) でコマンドスニペットを生成中...</span>
+            <span className="text-[11px]">
+              {autoInspect && isSshAvailable
+                ? '裏SSH自律環境調査 & Claude回答を生成中...'
+                : 'Claude CLI (claude -p) で回答を生成中...'}
+            </span>
           </div>
         )}
 

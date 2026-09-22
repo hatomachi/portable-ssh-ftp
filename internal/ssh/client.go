@@ -1,8 +1,11 @@
 package ssh
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,3 +181,55 @@ func (c *Client) NewSession() (*ssh.Session, error) {
 func (c *Client) RawClient() *ssh.Client {
 	return c.sshClient
 }
+
+// RunCommandWithLimit executes a command on the remote host, capturing stdout and stderr.
+// It respects context cancellation and caps output at maxBytes.
+func (c *Client) RunCommandWithLimit(ctx context.Context, cmd string, maxBytes int64) (string, error) {
+	if c.sshClient == nil {
+		return "", fmt.Errorf("ssh client not connected")
+	}
+
+	session, err := c.sshClient.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	if maxBytes <= 0 {
+		maxBytes = 16 * 1024 // default 16KB
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	session.Stdout = &stdoutBuf
+	session.Stderr = &stderrBuf
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- session.Run(cmd)
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGKILL)
+		_ = session.Close()
+		return "", ctx.Err()
+	case err := <-doneCh:
+		combined := stdoutBuf.String()
+		if stderrBuf.Len() > 0 {
+			if combined != "" {
+				combined += "\n"
+			}
+			combined += stderrBuf.String()
+		}
+
+		if int64(len(combined)) > maxBytes {
+			combined = combined[:maxBytes] + "\n...[出力が上限を超えたため切り詰められました]"
+		}
+
+		if err != nil {
+			return combined, fmt.Errorf("command execution failed (%v): %s", err, strings.TrimSpace(combined))
+		}
+		return combined, nil
+	}
+}
+
