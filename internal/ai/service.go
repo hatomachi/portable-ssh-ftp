@@ -142,6 +142,7 @@ func (s *Service) CheckStatus(ctx context.Context) StatusResponse {
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, cmdPath, "--version")
+	hideConsoleWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return StatusResponse{
@@ -319,6 +320,7 @@ func (s *Service) runClaudeCLI(ctx context.Context, prompt string, timeout time.
 	} else {
 		cmd = exec.CommandContext(execCtx, cmdPath, "-p", prompt)
 	}
+	hideConsoleWindow(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
