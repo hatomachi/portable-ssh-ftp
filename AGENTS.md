@@ -76,3 +76,23 @@ cd ..
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o portable-ssh-ftp.exe .
 ```
 生成された `portable-ssh-ftp.exe` をWindows機に持参し、ダブルクリックするだけで起動します。
+
+---
+
+## 📦 機能実装・修正完了時のデプロイ規範（GitHub Actions自動ビルド＆リリース）
+**【超重要】ユーザーへの完了報告前に、必ずリモートへのプッシュ・ビルドトリガーまで完了させること**
+
+機能実装やバグ修正が完了した際は、ローカル検証（単体テスト・フロントエンドビルド・クロスコンパイル）だけで終わらせず、必ず以下のステップを完遂してください。
+
+1. **Git コミット**:
+   - 変更内容を意味のあるコミットメッセージでコミットする（Conventional Commits 推奨）。
+2. **リリースタグ付与**:
+   - セマンティックバージョニングに従い、適切なタグを付与する（例: `git tag -a v0.10.1 -m "Release v0.10.1: ..."`）。
+3. **リモートプッシュ (main & tags)**:
+   - `git push origin main --tags` を実行。
+   - これにより、GitHub Actions の Release ワークフローが起動し、Windows exe（通常版・コンソール版）、macOS、Linux 用のバイナリがクラウド上で自動ビルドされ、GitHub Releases に即座に配置されます。
+4. **作戦ノート同期**:
+   - `personal-vault` の作戦ノートおよび `00_Dashboard.md` を更新・コミット・プッシュする。
+5. **完了報告**:
+   - GitHub Releases（https://github.com/hatomachi/portable-ssh-ftp/releases）の最新アセットが自動生成される旨をユーザーに報告する。
+
