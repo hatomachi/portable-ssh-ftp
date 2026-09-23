@@ -220,12 +220,32 @@ export interface AIChatRequest {
   model?: string;
   autoInspect?: boolean;
   allowedCommands?: string[];
+  sessionId?: string;
+  hostKey?: string;
+  isResume?: boolean;
 }
 
 export interface AIChatResponse {
+  sessionId?: string;
   reply: string;
   commands: AICommandSnippet[];
   inspectLogs?: AIInspectLog[];
+}
+
+export interface AISessionSummary {
+  id: string;
+  title: string;
+  hostKey: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export interface AIKnowledgeResponse {
+  hostKey: string;
+  workspacePath: string;
+  content: string;
+  updatedAt?: string;
 }
 
 

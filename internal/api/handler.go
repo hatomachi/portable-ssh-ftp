@@ -30,6 +30,7 @@ type API struct {
 	profileStore *config.ProfileStore
 	lifecycleMgr *lifecycle.Manager
 	aiSvc        *ai.Service
+	workspaceMgr *ai.WorkspaceManager
 	port         int
 	mcpServers   sync.Map
 }
@@ -42,11 +43,16 @@ func NewAPI(mgr *session.Manager, profileStore *config.ProfileStore) *API {
 		mgr:          mgr,
 		profileStore: profileStore,
 		aiSvc:        ai.NewService(""),
+		workspaceMgr: ai.NewWorkspaceManager(""),
 	}
 }
 
 func (a *API) SetAIService(svc *ai.Service) {
 	a.aiSvc = svc
+}
+
+func (a *API) SetWorkspaceManager(wm *ai.WorkspaceManager) {
+	a.workspaceMgr = wm
 }
 
 func (a *API) SetLifecycleManager(lm *lifecycle.Manager) {
@@ -103,9 +109,14 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/shutdown-beacon", a.handleShutdownBeacon)
 	mux.HandleFunc("/api/shutdown", a.handleShutdown)
 
-	// AI Copilot (Claude CLI)
+	// AI Copilot & Workspaces (Claude CLI)
 	mux.HandleFunc("GET /api/ai/status", a.handleAIStatus)
 	mux.HandleFunc("POST /api/ai/chat", a.handleAIChat)
+	mux.HandleFunc("GET /api/ai/sessions", a.handleListAISessions)
+	mux.HandleFunc("GET /api/ai/session/{id}/messages", a.handleGetAISessionMessages)
+	mux.HandleFunc("DELETE /api/ai/session/{id}", a.handleDeleteAISession)
+	mux.HandleFunc("GET /api/ai/knowledge", a.handleGetAIKnowledge)
+	mux.HandleFunc("PUT /api/ai/knowledge", a.handleSaveAIKnowledge)
 	mux.HandleFunc("POST /api/mcp", a.handleMCP)
 }
 
@@ -995,6 +1006,37 @@ func (a *API) handleMCP(w http.ResponseWriter, r *http.Request) {
 	server.ServeHTTP(w, r)
 }
 
+func (a *API) resolveHostKey(hostKey string, ctxHost string, ctxUser string, sessionID string) string {
+	if hostKey != "" {
+		return hostKey
+	}
+	if ctxHost != "" {
+		if ctxUser != "" {
+			return fmt.Sprintf("%s@%s", ctxUser, ctxHost)
+		}
+		return ctxHost
+	}
+	if sessionID != "" && a.mgr != nil {
+		if sess, ok := a.mgr.GetSession(sessionID); ok {
+			if sess.Req.Host != "" {
+				if sess.Req.SSHUsername != "" {
+					return fmt.Sprintf("%s@%s", sess.Req.SSHUsername, sess.Req.Host)
+				}
+				return sess.Req.Host
+			}
+		}
+	}
+	return "default_host"
+}
+
+func generateSessionUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		errorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1015,6 +1057,31 @@ func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, http.StatusBadRequest, "Prompt is required")
 		return
 	}
+
+	hostKey := a.resolveHostKey(req.HostKey, req.Context.Host, req.Context.User, req.Context.SessionID)
+	req.HostKey = hostKey
+
+	var workDir string
+	if a.workspaceMgr != nil {
+		wd, err := a.workspaceMgr.GetHostWorkspace(hostKey)
+		if err == nil {
+			workDir = wd
+		}
+	}
+
+	sessionID := req.SessionID
+	isResume := req.IsResume
+	if sessionID == "" {
+		sessionID = generateSessionUUID()
+		isResume = false
+	} else if a.workspaceMgr != nil {
+		existingMsgs, _ := a.workspaceMgr.GetSessionMessages(hostKey, sessionID)
+		if len(existingMsgs) > 0 {
+			isResume = true
+		}
+	}
+	req.SessionID = sessionID
+	req.IsResume = isResume
 
 	var mcpServer *ai.MCPServer
 	var mcpURL string
@@ -1044,13 +1111,146 @@ func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	res, err := a.aiSvc.InspectAndChat(r.Context(), req, mcpURL, mcpServer)
+	res, err := a.aiSvc.InspectAndChatWithWorkspace(r.Context(), req, mcpURL, mcpServer, workDir)
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	res.SessionID = sessionID
+
+	// Persist session history
+	if a.workspaceMgr != nil {
+		existingMsgs, _ := a.workspaceMgr.GetSessionMessages(hostKey, sessionID)
+		now := time.Now().UnixMilli()
+		userMsg := ai.SavedChatMessage{
+			ID:        fmt.Sprintf("u-%d", now),
+			Role:      "user",
+			Content:   req.Prompt,
+			Timestamp: now,
+		}
+		assistantMsg := ai.SavedChatMessage{
+			ID:          fmt.Sprintf("a-%d", now+1),
+			Role:        "assistant",
+			Content:     res.Reply,
+			Commands:    res.Commands,
+			InspectLogs: res.InspectLogs,
+			Timestamp:   now + 1,
+		}
+		updatedMsgs := append(existingMsgs, userMsg, assistantMsg)
+		_ = a.workspaceMgr.SaveSession(hostKey, sessionID, "", updatedMsgs)
+	}
+
 	jsonResponse(w, http.StatusOK, res)
+}
+
+func (a *API) handleListAISessions(w http.ResponseWriter, r *http.Request) {
+	if a.workspaceMgr == nil {
+		errorResponse(w, http.StatusServiceUnavailable, "Workspace manager not configured")
+		return
+	}
+
+	hostKey := a.resolveHostKey(r.URL.Query().Get("hostKey"), "", "", r.URL.Query().Get("sessionId"))
+	sessions, err := a.workspaceMgr.ListSessions(hostKey)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"hostKey":  ai.SanitizeHostKey(hostKey),
+		"sessions": sessions,
+	})
+}
+
+func (a *API) handleGetAISessionMessages(w http.ResponseWriter, r *http.Request) {
+	if a.workspaceMgr == nil {
+		errorResponse(w, http.StatusServiceUnavailable, "Workspace manager not configured")
+		return
+	}
+
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		sessionID = r.URL.Query().Get("id")
+	}
+	if sessionID == "" {
+		errorResponse(w, http.StatusBadRequest, "session id is required")
+		return
+	}
+
+	hostKey := a.resolveHostKey(r.URL.Query().Get("hostKey"), "", "", r.URL.Query().Get("sessionId"))
+	messages, err := a.workspaceMgr.GetSessionMessages(hostKey, sessionID)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"sessionId": sessionID,
+		"hostKey":   ai.SanitizeHostKey(hostKey),
+		"messages":  messages,
+	})
+}
+
+func (a *API) handleDeleteAISession(w http.ResponseWriter, r *http.Request) {
+	if a.workspaceMgr == nil {
+		errorResponse(w, http.StatusServiceUnavailable, "Workspace manager not configured")
+		return
+	}
+
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		sessionID = r.URL.Query().Get("id")
+	}
+	if sessionID == "" {
+		errorResponse(w, http.StatusBadRequest, "session id is required")
+		return
+	}
+
+	hostKey := a.resolveHostKey(r.URL.Query().Get("hostKey"), "", "", r.URL.Query().Get("sessionId"))
+	if err := a.workspaceMgr.DeleteSession(hostKey, sessionID); err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (a *API) handleGetAIKnowledge(w http.ResponseWriter, r *http.Request) {
+	if a.workspaceMgr == nil {
+		errorResponse(w, http.StatusServiceUnavailable, "Workspace manager not configured")
+		return
+	}
+
+	hostKey := a.resolveHostKey(r.URL.Query().Get("hostKey"), "", "", r.URL.Query().Get("sessionId"))
+	resp, err := a.workspaceMgr.GetKnowledge(hostKey)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, resp)
+}
+
+func (a *API) handleSaveAIKnowledge(w http.ResponseWriter, r *http.Request) {
+	if a.workspaceMgr == nil {
+		errorResponse(w, http.StatusServiceUnavailable, "Workspace manager not configured")
+		return
+	}
+
+	var req ai.SaveKnowledgeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	hostKey := a.resolveHostKey(req.HostKey, "", "", "")
+	if err := a.workspaceMgr.SaveKnowledge(hostKey, req.Content); err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
 

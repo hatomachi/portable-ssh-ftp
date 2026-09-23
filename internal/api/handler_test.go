@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"portable-ssh-ftp/internal/ai"
 	"portable-ssh-ftp/internal/config"
 	"portable-ssh-ftp/internal/lifecycle"
 	"portable-ssh-ftp/internal/session"
@@ -321,6 +323,87 @@ func TestAPI_AIChat_Validation(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 status for invalid json, got %d", w.Code)
+	}
+}
+
+func TestAPI_AIWorkspaceAndSessions(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "pssh-api-workspace-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	mgr := session.NewManager()
+	api := NewAPI(mgr, nil)
+	wm := ai.NewWorkspaceManager(tmpDir)
+	api.SetWorkspaceManager(wm)
+
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	hostKey := "test-host-1.local"
+
+	// 1. GET /api/ai/sessions
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/sessions?hostKey="+hostKey, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for sessions list, got %d", w.Code)
+	}
+
+	// 2. GET /api/ai/knowledge (should have auto-generated CLAUDE.md)
+	req = httptest.NewRequest(http.MethodGet, "/api/ai/knowledge?hostKey="+hostKey, nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for knowledge get, got %d", w.Code)
+	}
+	var kResp ai.KnowledgeResponse
+	if err := json.NewDecoder(w.Body).Decode(&kResp); err != nil {
+		t.Fatalf("failed to decode knowledge response: %v", err)
+	}
+	if !strings.Contains(kResp.Content, "リモートホスト運用ナレッジ") {
+		t.Errorf("expected initial CLAUDE.md template content")
+	}
+
+	// 3. PUT /api/ai/knowledge
+	updateBody := `{"hostKey":"` + hostKey + `","content":"# My Updated Server Notes"}`
+	req = httptest.NewRequest(http.MethodPut, "/api/ai/knowledge", strings.NewReader(updateBody))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for knowledge put, got %d", w.Code)
+	}
+
+	// Verify update
+	req = httptest.NewRequest(http.MethodGet, "/api/ai/knowledge?hostKey="+hostKey, nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var kResp2 ai.KnowledgeResponse
+	_ = json.NewDecoder(w.Body).Decode(&kResp2)
+	if kResp2.Content != "# My Updated Server Notes" {
+		t.Errorf("knowledge content = %q; want '# My Updated Server Notes'", kResp2.Content)
+	}
+
+	// 4. Save a session and verify GET messages & DELETE
+	sID := "session-abc-123"
+	_ = wm.SaveSession(hostKey, sID, "Test Title", []ai.SavedChatMessage{
+		{ID: "1", Role: "user", Content: "Hello"},
+	})
+
+	req = httptest.NewRequest(http.MethodGet, "/api/ai/session/"+sID+"/messages?hostKey="+hostKey, nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for get session messages, got %d", w.Code)
+	}
+
+	// DELETE
+	req = httptest.NewRequest(http.MethodDelete, "/api/ai/session/"+sID+"?hostKey="+hostKey, nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for delete session, got %d", w.Code)
 	}
 }
 

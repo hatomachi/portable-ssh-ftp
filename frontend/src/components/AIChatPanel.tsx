@@ -20,9 +20,14 @@ import {
   ChevronDown,
   ChevronRight,
   SlidersHorizontal,
+  BookOpen,
+  Plus,
+  History,
+  Edit3,
+  Save,
 } from 'lucide-react';
-import type { AIChatMessage, AIInspectLog, AIStatusResponse, SessionStatus } from '../types';
-import { getAIStatus, askAIChat } from '../api/client';
+import type { AIChatMessage, AIInspectLog, AIStatusResponse, SessionStatus, AISessionSummary, AIKnowledgeResponse } from '../types';
+import { getAIStatus, askAIChat, listAISessions, getAISessionMessages, deleteAISession, getAIKnowledge, saveAIKnowledge } from '../api/client';
 import { getSessionAiContext } from '../utils/aiContextManager';
 
 interface AIChatPanelProps {
@@ -191,6 +196,24 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
 
   const isSshAvailable = Boolean(sessionStatus?.sshConnected);
 
+  const hostKey = sessionStatus?.host
+    ? (sessionStatus.sshUsername ? `${sessionStatus.sshUsername}@${sessionStatus.host}` : sessionStatus.host)
+    : (sessionId ? `session_${sessionId.slice(0, 8)}` : 'default_host');
+
+  // AI Session Management
+  const [aiSessionId, setAiSessionId] = useState<string>('');
+  const [aiSessions, setAiSessions] = useState<AISessionSummary[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [showSessionMenu, setShowSessionMenu] = useState(false);
+
+  // Host Knowledge (CLAUDE.md) Modal
+  const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
+  const [knowledge, setKnowledge] = useState<AIKnowledgeResponse | null>(null);
+  const [knowledgeContent, setKnowledgeContent] = useState('');
+  const [isEditingKnowledge, setIsEditingKnowledge] = useState(false);
+  const [isSavingKnowledge, setIsSavingKnowledge] = useState(false);
+  const [copiedWorkspacePath, setCopiedWorkspacePath] = useState(false);
+
   // Live context preview
   const [currentContext, setCurrentContext] = useState<{
     currentPath: string;
@@ -227,6 +250,75 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     }
   };
 
+  // Fetch host AI sessions
+  const fetchSessions = useCallback(async () => {
+    if (!sessionId && !sessionStatus?.host) return;
+    setIsLoadingSessions(true);
+    try {
+      const res = await listAISessions(hostKey, sessionId);
+      setAiSessions(res.sessions || []);
+    } catch (err) {
+      console.warn('Failed to load AI sessions:', err);
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, [hostKey, sessionId, sessionStatus?.host]);
+
+  const handleSelectSession = async (sId: string) => {
+    try {
+      const msgs = await getAISessionMessages(sId, hostKey);
+      setMessages(msgs);
+      setAiSessionId(sId);
+      setShowSessionMenu(false);
+    } catch (err: any) {
+      alert('セッションの読み込みに失敗しました: ' + (err.message || err));
+    }
+  };
+
+  const handleNewSession = () => {
+    setAiSessionId('');
+    setMessages([]);
+    setShowSessionMenu(false);
+  };
+
+  const handleDeleteSession = async (sId: string) => {
+    if (!window.confirm('このセッションを削除しますか？')) return;
+    try {
+      await deleteAISession(sId, hostKey);
+      if (sId === aiSessionId) {
+        handleNewSession();
+      }
+      fetchSessions();
+    } catch (err: any) {
+      alert('セッションの削除に失敗しました: ' + (err.message || err));
+    }
+  };
+
+  const handleOpenKnowledge = async () => {
+    try {
+      const res = await getAIKnowledge(hostKey, sessionId);
+      setKnowledge(res);
+      setKnowledgeContent(res.content);
+      setIsEditingKnowledge(false);
+      setShowKnowledgeModal(true);
+    } catch (err: any) {
+      alert('ナレッジの読み込みに失敗しました: ' + (err.message || err));
+    }
+  };
+
+  const handleSaveKnowledge = async () => {
+    setIsSavingKnowledge(true);
+    try {
+      await saveAIKnowledge(hostKey, knowledgeContent);
+      setKnowledge((prev) => prev ? { ...prev, content: knowledgeContent } : null);
+      setIsEditingKnowledge(false);
+    } catch (err: any) {
+      alert('ナレッジの保存に失敗しました: ' + (err.message || err));
+    } finally {
+      setIsSavingKnowledge(false);
+    }
+  };
+
   // Check AI CLI status on mount & when opened
   const checkStatus = useCallback(async () => {
     setIsCheckingStatus(true);
@@ -246,8 +338,9 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   useEffect(() => {
     if (isOpen) {
       checkStatus();
+      fetchSessions();
     }
-  }, [isOpen, checkStatus]);
+  }, [isOpen, checkStatus, fetchSessions]);
 
   // Refresh context info when opened or active session changes
   const refreshContextPreview = useCallback(() => {
@@ -332,7 +425,15 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         context: aiContext,
         autoInspect: autoInspect && isSshAvailable,
         allowedCommands: autoInspect ? allowedCommands : undefined,
+        sessionId: aiSessionId || undefined,
+        hostKey,
+        isResume: Boolean(aiSessionId),
       });
+
+      if (res.sessionId && res.sessionId !== aiSessionId) {
+        setAiSessionId(res.sessionId);
+      }
+      fetchSessions();
 
       const assistantMessage: AIChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -446,6 +547,108 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             className="p-1.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
           >
             <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Session & Host Knowledge Bar */}
+      <div className="px-3 py-1.5 border-b border-slate-800/80 bg-slate-950/70 flex items-center justify-between text-xs">
+        {/* Session Dropdown Trigger */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowSessionMenu(!showSessionMenu)}
+            className="flex items-center space-x-1.5 px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-800 text-slate-200 border border-slate-700/60 text-[11px] max-w-[210px] transition-colors"
+            title="過去セッションの切り替え・再開"
+          >
+            <History className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <span className="truncate">
+              {aiSessions.find((s) => s.id === aiSessionId)?.title || (aiSessionId ? `セッション ${aiSessionId.slice(0, 8)}` : '新しいチャット')}
+            </span>
+            <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+          </button>
+
+          {/* Sessions Dropdown Menu */}
+          {showSessionMenu && (
+            <div className="absolute left-0 top-full mt-1 w-72 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-50 overflow-hidden text-[11px]">
+              <div className="p-2 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+                <span className="font-semibold text-slate-300">過去セッション</span>
+                <button
+                  type="button"
+                  onClick={handleNewSession}
+                  className="flex items-center space-x-1 px-2 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium text-[10px] transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>新規チャット</span>
+                </button>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/60">
+                {isLoadingSessions ? (
+                  <div className="p-3 text-center text-slate-500 flex items-center justify-center space-x-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" />
+                    <span>履歴を読み込み中...</span>
+                  </div>
+                ) : aiSessions.length === 0 ? (
+                  <div className="p-3 text-center text-slate-500 text-[11px]">
+                    保存された過去セッションはありません
+                  </div>
+                ) : (
+                  aiSessions.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`flex items-center justify-between p-2 hover:bg-slate-800/60 cursor-pointer transition-colors ${
+                        s.id === aiSessionId ? 'bg-sky-950/40 border-l-2 border-sky-400' : ''
+                      }`}
+                      onClick={() => handleSelectSession(s.id)}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className="text-slate-200 font-medium truncate" title={s.title}>
+                          {s.title}
+                        </div>
+                        <div className="text-[10px] text-slate-500 flex items-center space-x-2 mt-0.5">
+                          <span>{new Date(s.updatedAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                          <span>• {s.messageCount} 件</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteSession(s.id);
+                        }}
+                        className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-700/60 transition-colors"
+                        title="セッションを削除"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right Action Buttons */}
+        <div className="flex items-center space-x-1.5">
+          <button
+            type="button"
+            onClick={handleOpenKnowledge}
+            className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-800 text-emerald-300 border border-slate-700/60 text-[11px] transition-colors"
+            title="ホスト運用ナレッジ (CLAUDE.md) を確認・編集"
+          >
+            <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
+            <span>ナレッジ</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleNewSession}
+            className="p-1 rounded bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/60 transition-colors"
+            title="新しいチャットを開始"
+          >
+            <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -848,6 +1051,101 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
               >
                 設定完了
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Host Knowledge (CLAUDE.md) Modal */}
+      {showKnowledgeModal && knowledge && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-xl w-full flex flex-col max-h-[85vh] overflow-hidden text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <div className="flex items-center space-x-2">
+                <BookOpen className="w-4 h-4 text-emerald-400" />
+                <span className="font-semibold text-sm text-slate-100">ホスト運用ナレッジ (CLAUDE.md)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowKnowledgeModal(false)}
+                className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Subheader (Path info) */}
+            <div className="px-4 py-2 bg-slate-950 border-b border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+              <span className="truncate" title={knowledge.workspacePath}>📁 {knowledge.workspacePath}/CLAUDE.md</span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(knowledge.workspacePath);
+                  setCopiedWorkspacePath(true);
+                  setTimeout(() => setCopiedWorkspacePath(false), 2000);
+                }}
+                className="ml-2 text-sky-400 hover:text-sky-300 shrink-0 font-sans"
+              >
+                {copiedWorkspacePath ? 'コピー完了!' : 'パスをコピー'}
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-4 flex-1 overflow-y-auto">
+              {isEditingKnowledge ? (
+                <textarea
+                  value={knowledgeContent}
+                  onChange={(e) => setKnowledgeContent(e.target.value)}
+                  className="w-full h-80 p-3 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 font-mono text-xs focus:outline-hidden focus:border-emerald-500 leading-relaxed resize-none"
+                  placeholder="ホスト運用ナレッジ（サーバー用途、サービスポート、注意点など）を入力..."
+                />
+              ) : (
+                <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg text-slate-300 font-sans text-xs whitespace-pre-wrap leading-relaxed max-h-80 overflow-y-auto select-text">
+                  {knowledge.content || '(ナレッジが空です。「編集」ボタンからホスト情報を記載できます)'}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-4 py-3 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between">
+              <span className="text-[10px] text-slate-500 hidden sm:inline">
+                Claude Code はこのフォルダの CLAUDE.md を自律参照して応答します
+              </span>
+              <div className="flex items-center space-x-2 ml-auto">
+                {isEditingKnowledge ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingKnowledge(false)}
+                      className="px-3 py-1.5 rounded text-xs text-slate-300 hover:bg-slate-800"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveKnowledge}
+                      disabled={isSavingKnowledge}
+                      className="px-3 py-1.5 rounded text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium flex items-center space-x-1"
+                    >
+                      {isSavingKnowledge ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                      <span>保存</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setKnowledgeContent(knowledge.content);
+                      setIsEditingKnowledge(true);
+                    }}
+                    className="px-3 py-1.5 rounded text-xs bg-sky-600 hover:bg-sky-500 text-white font-medium flex items-center space-x-1"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>ナレッジを編集</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

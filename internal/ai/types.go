@@ -36,6 +36,9 @@ type ChatRequest struct {
 	Model           string      `json:"model,omitempty"`
 	AutoInspect     bool        `json:"autoInspect"`
 	AllowedCommands []string    `json:"allowedCommands,omitempty"`
+	SessionID       string      `json:"sessionId,omitempty"`
+	HostKey         string      `json:"hostKey,omitempty"`
+	IsResume        bool        `json:"isResume,omitempty"`
 }
 
 type CommandSnippet struct {
@@ -55,8 +58,43 @@ type InspectLog struct {
 }
 
 type ChatResponse struct {
+	SessionID   string           `json:"sessionId,omitempty"`
 	Reply       string           `json:"reply"`
 	Commands    []CommandSnippet `json:"commands"`
 	InspectLogs []InspectLog     `json:"inspectLogs,omitempty"`
+}
+
+// AISessionSummary represents a conversation session metadata.
+type AISessionSummary struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	HostKey      string `json:"hostKey"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+	MessageCount int    `json:"messageCount"`
+}
+
+// SavedChatMessage represents a stored message item with full rich data.
+type SavedChatMessage struct {
+	ID          string           `json:"id"`
+	Role        string           `json:"role"` // "user" or "assistant"
+	Content     string           `json:"content"`
+	Commands    []CommandSnippet `json:"commands,omitempty"`
+	InspectLogs []InspectLog     `json:"inspectLogs,omitempty"`
+	Timestamp   int64            `json:"timestamp"`
+}
+
+// KnowledgeResponse represents the content of CLAUDE.md for a host workspace.
+type KnowledgeResponse struct {
+	HostKey       string `json:"hostKey"`
+	WorkspacePath string `json:"workspacePath"`
+	Content       string `json:"content"`
+	UpdatedAt     string `json:"updatedAt,omitempty"`
+}
+
+// SaveKnowledgeRequest represents a request to update CLAUDE.md.
+type SaveKnowledgeRequest struct {
+	HostKey string `json:"hostKey"`
+	Content string `json:"content"`
 }
 
