@@ -9,20 +9,37 @@ export function initLifecycle(): () => void {
   // Initial ping
   sendHeartbeat();
 
-  // Send heartbeat every 2.5 seconds (server timeout is 6 seconds)
+  // Send heartbeat every 3 seconds (server timeout is now 30 seconds)
   const intervalId = setInterval(() => {
     sendHeartbeat();
-  }, 2500);
+  }, 3000);
+
+  // Send heartbeat immediately when returning from sleep, focus, or network reconnection
+  const handleWakeOrFocus = () => {
+    sendHeartbeat();
+  };
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      sendHeartbeat();
+    }
+  };
 
   const handleBeforeUnload = () => {
     sendShutdownBeacon();
   };
 
   window.addEventListener('beforeunload', handleBeforeUnload);
+  window.addEventListener('focus', handleWakeOrFocus);
+  window.addEventListener('online', handleWakeOrFocus);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   return () => {
     clearInterval(intervalId);
     window.removeEventListener('beforeunload', handleBeforeUnload);
+    window.removeEventListener('focus', handleWakeOrFocus);
+    window.removeEventListener('online', handleWakeOrFocus);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
   };
 }
 

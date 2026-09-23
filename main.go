@@ -41,7 +41,7 @@ func main() {
 	termHandler := terminal.NewHandler(sessionMgr)
 
 	// Lifecycle & Auto-Shutdown management
-	lifecycleMgr := lifecycle.NewManager(!*noAutoclose, 6*time.Second)
+	lifecycleMgr := lifecycle.NewManager(!*noAutoclose, 30*time.Second)
 	apiHandler.SetLifecycleManager(lifecycleMgr)
 
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
@@ -75,7 +75,7 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	appURL := fmt.Sprintf("http://localhost:%d", actualPort)
+	appURL := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
 	fmt.Printf("\n🚀 Portable SSH & FTP is running!\n")
 	fmt.Printf("👉 Access URL: %s\n\n", appURL)
 
