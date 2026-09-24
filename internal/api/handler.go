@@ -1085,8 +1085,13 @@ func (a *API) handleAIChat(w http.ResponseWriter, r *http.Request) {
 
 	var mcpServer *ai.MCPServer
 	var mcpURL string
-	if req.AutoInspect && req.Context.SessionID != "" && a.mgr != nil {
-		if sess, ok := a.mgr.GetSession(req.Context.SessionID); ok && sess.SSHClient != nil {
+	if req.AutoInspect && a.mgr != nil {
+		targetSessID := req.Context.SessionID
+		sess, ok := a.mgr.GetSession(targetSessID)
+		if (!ok || sess.SSHClient == nil) && targetSessID != "" {
+			sess, ok = a.mgr.GetSession("active")
+		}
+		if ok && sess != nil && sess.SSHClient != nil {
 			tokenBytes := make([]byte, 16)
 			_, _ = rand.Read(tokenBytes)
 			token := hex.EncodeToString(tokenBytes)

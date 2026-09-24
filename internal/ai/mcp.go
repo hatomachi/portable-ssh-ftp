@@ -190,6 +190,18 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	res.ID = req.ID
 
 	switch req.Method {
+	case "server/discover":
+		res.Result = map[string]any{
+			"protocolVersion": "2026-07-28",
+			"capabilities": map[string]any{
+				"tools": map[string]any{},
+			},
+			"serverInfo": map[string]any{
+				"name":    "sshinspect",
+				"version": "1.0.0",
+			},
+		}
+
 	case "initialize":
 		res.Result = map[string]any{
 			"protocolVersion": "2024-11-05",
@@ -234,7 +246,7 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								"description": "このコマンドで何を確かめたいかの調査目的（UI表示用）",
 							},
 						},
-						"required":             []string{"command", "args"},
+						"required":             []string{"command"},
 						"additionalProperties": false,
 					},
 				},
@@ -248,7 +260,7 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		if params.Name != "remote_inspect" {
+		if params.Name != "remote_inspect" && params.Name != "mcp__sshinspect__remote_inspect" {
 			res.Error = map[string]any{"code": -32601, "message": fmt.Sprintf("Unknown tool: %s", params.Name)}
 			break
 		}

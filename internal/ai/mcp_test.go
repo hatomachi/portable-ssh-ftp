@@ -145,6 +145,25 @@ func TestMCPServer_ServeHTTP(t *testing.T) {
 
 	server := NewMCPServer("secret-token", mock, []string{"ls", "cat", "df"})
 
+	// 0. Server Discover (Claude Code probe)
+	t.Run("server/discover", func(t *testing.T) {
+		reqBody := `{"jsonrpc":"2.0","id":"probe-1","method":"server/discover","params":{}}`
+		r := httptest.NewRequest(http.MethodPost, "/mcp?token=secret-token", strings.NewReader(reqBody))
+		w := httptest.NewRecorder()
+
+		server.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		var res JSONRPCResponse
+		json.NewDecoder(w.Body).Decode(&res)
+		resultMap, ok := res.Result.(map[string]any)
+		if !ok || resultMap["protocolVersion"] != "2026-07-28" {
+			t.Errorf("unexpected discover result: %v", res.Result)
+		}
+	})
+
 	// 1. Initialize
 	t.Run("initialize", func(t *testing.T) {
 		reqBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
@@ -221,6 +240,32 @@ func TestMCPServer_ServeHTTP(t *testing.T) {
 		}
 	})
 
+	// 3b. Tools/Call - Wire Name prefix and optional args
+	t.Run("tools/call wire name and optional args", func(t *testing.T) {
+		reqBody := `{
+			"jsonrpc": "2.0",
+			"id": 35,
+			"method": "tools/call",
+			"params": {
+				"name": "mcp__sshinspect__remote_inspect",
+				"arguments": {
+					"command": "df"
+				}
+			}
+		}`
+		r := httptest.NewRequest(http.MethodPost, "/mcp?token=secret-token", strings.NewReader(reqBody))
+		w := httptest.NewRecorder()
+
+		server.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		if mock.lastCmd != "df" {
+			t.Errorf("expected executed command df, got %q", mock.lastCmd)
+		}
+	})
+
 	// 4. Tools/Call - Blocked (unallowed command)
 	t.Run("tools/call blocked unallowed", func(t *testing.T) {
 		reqBody := `{
@@ -252,8 +297,8 @@ func TestMCPServer_ServeHTTP(t *testing.T) {
 		}
 
 		logs := server.GetLogs()
-		if len(logs) != 2 || !logs[1].Blocked {
-			t.Errorf("expected blocked log, got: %+v", logs)
+		if len(logs) < 1 || !logs[len(logs)-1].Blocked {
+			t.Errorf("expected last log to be blocked, got: %+v", logs)
 		}
 	})
 

@@ -663,7 +663,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
           <div className="flex items-center space-x-2">
             <div className="flex items-center space-x-1">
               <label
-                title={isSshAvailable ? '安全な読み取りコマンド(ls, cat等)で裏SSH自律調査を行います' : 'SSH接続時のみ利用可能です'}
+                title={isSshAvailable ? '安全な読み取りコマンド(ls, cat等)で裏SSH自律調査を行います (Native MCP)' : 'SSH接続時のみ利用可能です'}
                 className={`flex items-center space-x-1 text-[10px] ${
                   isSshAvailable ? 'text-sky-300 hover:text-sky-200 cursor-pointer' : 'text-slate-600 cursor-not-allowed'
                 }`}
@@ -675,15 +675,18 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                   onChange={(e) => setAutoInspect(e.target.checked)}
                   className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0 w-3 h-3 disabled:opacity-30"
                 />
-                <span className="flex items-center space-x-0.5">
+                <span className="flex items-center space-x-1">
                   <Search className="w-3 h-3 text-sky-400" />
-                  <span>自律調査</span>
+                  <span>自律調査 (MCP)</span>
+                  {autoInspect && isSshAvailable && (
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="MCPサーバー待機中" />
+                  )}
                 </span>
               </label>
               <button
                 type="button"
                 onClick={() => setShowCommandSettings(true)}
-                title={`許可コマンド設定 (${allowedCommands.length}件許可中)`}
+                title={`MCP許可コマンド設定 (${allowedCommands.length}件許可中)`}
                 className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800/80 transition-colors"
               >
                 <SlidersHorizontal className="w-3 h-3 text-slate-400 hover:text-sky-300" />
